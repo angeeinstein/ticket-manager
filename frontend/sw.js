@@ -5,7 +5,7 @@
  * network. API calls (/api/*) are never cached; they go straight to the network and the
  * app falls back to its IndexedDB cache when offline.
  */
-const CACHE = "ticket-checker-v4";
+const CACHE = "ticket-checker-v5";
 const SHELL = [
   "./",
   "index.html",

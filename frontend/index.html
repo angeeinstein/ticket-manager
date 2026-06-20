@@ -76,16 +76,6 @@
     </div>
   </section>
 
-  <!-- ============================ ADD TAB ============================ -->
-  <section id="tab-add" class="tab">
-    <h2>Add tickets (upload PDFs)</h2>
-    <p class="muted">Select one or more ticket PDFs. They are parsed on the server and added
-      to the database. Needs connectivity.</p>
-    <input id="pdf-input" type="file" accept="application/pdf" multiple class="input" />
-    <div class="row"><button id="btn-upload" class="btn btn-ok">Upload &amp; ingest</button></div>
-    <div id="ingest-results" class="ingest-results"></div>
-  </section>
-
   <!-- ========================== SETTINGS TAB ========================== -->
   <section id="tab-settings" class="tab">
     <h2>Event settings</h2>
@@ -158,13 +148,19 @@
     </ul>
     <p class="muted">All scanning, delay control, settings and statistics work offline from the
       local cache. Sync pulls new tickets / delay / settings and flushes scans when online.</p>
+
+    <h2>Add tickets (upload PDFs)</h2>
+    <p class="muted">Optional — select one or more ticket PDFs to parse on the server. Needs
+      connectivity. With walk-up mode on you don't need this.</p>
+    <input id="pdf-input" type="file" accept="application/pdf" multiple class="input" />
+    <div class="row"><button id="btn-upload" class="btn btn-ok">Upload &amp; ingest</button></div>
+    <div id="ingest-results" class="ingest-results"></div>
   </section>
 
   <!-- ============================ TAB BAR ============================ -->
   <nav class="tabbar">
     <button id="tabbtn-scan" class="tabbtn active">Scan</button>
-    <button id="tabbtn-add" class="tabbtn">Add</button>
-    <button id="tabbtn-settings" class="tabbtn">Settings</button>
+    <button id="tabbtn-settings" class="tabbtn tabbtn-sm">⚙ Settings</button>
   </nav>
 
   <script src="validity.js"></script>

@@ -430,10 +430,40 @@
   function minToHHMM(m) { m = ((m % 1440) + 1440) % 1440; return pad2(Math.floor(m / 60)) + ":" + pad2(m % 60); }
 
   // Build a Date for an "HH:MM" on the event day (falls back to today when unknown).
-  function slotDate(hhmm) {
-    const base = LS.eventDate ? new Date(LS.eventDate + "T00:00:00") : new Date();
-    const mins = hhmmToMin(hhmm);
-    return new Date(base.getFullYear(), base.getMonth(), base.getDate(), Math.floor(mins / 60), mins % 60, 0, 0);
+  function eventBaseMidnight() {
+    if (LS.eventDate) return new Date(LS.eventDate + "T00:00:00");
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+  }
+
+  // A schedule may cross midnight (e.g. 21:00 → 01:00). We find the chronological start of
+  // the schedule (the slot following the biggest gap on a 24h circle) and treat any time
+  // before it as belonging to the NEXT day. `anchor` is that start, in minutes-of-day.
+  function scheduleAnchorMin(slots) {
+    const starts = (slots || []).map((s) => hhmmToMin(s.start)).sort((a, b) => a - b);
+    if (!starts.length) return 0;
+    let anchor = starts[0], maxGap = -1;
+    for (let i = 0; i < starts.length; i++) {
+      const prev = starts[(i - 1 + starts.length) % starts.length];
+      const gap = i === 0 ? starts[i] + 1440 - prev : starts[i] - prev;
+      if (gap > maxGap) { maxGap = gap; anchor = starts[i]; }
+    }
+    return anchor;
+  }
+
+  // Minutes from the event base midnight, rolling times before the anchor to the next day.
+  function slotAbsMin(m, anchor) { return m >= anchor ? m : m + 1440; }
+
+  function slotDate(hhmm, anchor) {
+    return new Date(eventBaseMidnight().getTime() + slotAbsMin(hhmmToMin(hhmm), anchor) * 60000);
+  }
+
+  // Slots in chronological order, accounting for midnight crossing.
+  function sortedSlots() {
+    const slots = (LS.settings.slots || []).slice();
+    const anchor = scheduleAnchorMin(slots);
+    slots.sort((a, b) => slotAbsMin(hhmmToMin(a.start), anchor) - slotAbsMin(hhmmToMin(b.start), anchor));
+    return { slots: slots, anchor: anchor };
   }
 
   // -------------------------------------------------------------------- stats
@@ -452,9 +482,11 @@
 
   // The configured slot (real wall-clock) that `now` falls in, or null if between slots.
   function scheduleWindow(now) {
-    const slots = (LS.settings.slots || []).slice().sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    const { slots, anchor } = sortedSlots();
     for (const s of slots) {
-      const start = slotDate(s.start), end = slotDate(s.end);
+      const start = slotDate(s.start, anchor);
+      let end = slotDate(s.end, anchor);
+      if (end <= start) end = new Date(end.getTime() + 86400000); // safety for a wrapped end
       if (now >= start && now < end) return { start, end, label: s.start + "–" + s.end };
     }
     return null;
@@ -578,7 +610,7 @@
   }
 
   function renderSlots() {
-    const slots = (LS.settings.slots || []).slice().sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    const slots = sortedSlots().slots;
     $("slot-count").textContent = slots.length ? slots.length + " slot(s)" : "none — using auto " + (LS.settings.slot_length_minutes || 15) + "-min windows";
     const ul = $("slot-list");
     ul.innerHTML = "";
@@ -595,7 +627,8 @@
   }
 
   function setSlots(slots) {
-    slots.sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    const anchor = scheduleAnchorMin(slots);
+    slots.sort((a, b) => slotAbsMin(hhmmToMin(a.start), anchor) - slotAbsMin(hhmmToMin(b.start), anchor));
     touchSettings((s) => { s.slots = slots; });
   }
 
@@ -606,7 +639,9 @@
     if ($("gen-count").value) {
       count = Math.max(0, parseInt($("gen-count").value, 10) || 0);
     } else if ($("gen-end").value) {
-      count = Math.max(0, Math.floor((hhmmToMin($("gen-end").value) - start) / len));
+      let end = hhmmToMin($("gen-end").value);
+      if (end <= start) end += 1440; // schedule crosses midnight (e.g. 21:00 → 01:00)
+      count = Math.max(0, Math.floor((end - start) / len));
     }
     if (!count) { alert("Enter an end time or a number of slots."); return; }
     const slots = [];
@@ -730,7 +765,6 @@
 
   function wire() {
     $("tabbtn-scan").onclick = () => showTab("scan");
-    $("tabbtn-add").onclick = () => showTab("add");
     $("tabbtn-settings").onclick = () => showTab("settings");
 
     $("btn-camera").onclick = () => (stream ? stopCamera() : startCamera());
