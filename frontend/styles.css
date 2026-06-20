@@ -59,6 +59,12 @@ body {
 .field.toggle input { width: 22px; height: 22px; margin-top: 2px; flex: none; }
 .field.toggle span { margin-bottom: 0; color: var(--text); font-size: .92rem; }
 
+/* slot list */
+.slot-list { list-style: none; padding: 0; margin: 10px 0; max-height: 240px; overflow-y: auto; }
+.slot-list li { display: flex; justify-content: space-between; align-items: center;
+  background: var(--card); border-radius: 8px; padding: 8px 12px; margin: 6px 0; font-variant-numeric: tabular-nums; }
+.btn-x { background: none; border: none; color: var(--bad); font-size: 1.1rem; padding: 2px 8px; }
+
 /* result */
 .result { margin: 12px 0; border-radius: 14px; padding: 18px; text-align: center; border: 2px solid var(--line); background: var(--card); }
 .result-status { font-size: 1.8rem; font-weight: 800; letter-spacing: .5px; }

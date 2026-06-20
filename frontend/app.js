@@ -26,6 +26,8 @@
     },
     get version() { return parseInt(localStorage.getItem("tc_data_version") || "0", 10); },
     set version(v) { localStorage.setItem("tc_data_version", String(v)); },
+    get eventDate() { return localStorage.getItem("tc_event_date") || ""; },
+    set eventDate(v) { localStorage.setItem("tc_event_date", v || ""); },
     get lastSync() { return localStorage.getItem("tc_last_sync") || ""; },
     set lastSync(v) { localStorage.setItem("tc_last_sync", v); },
     get delay() { try { return JSON.parse(localStorage.getItem("tc_delay") || "null") || defaultDelay(); } catch (e) { return defaultDelay(); } },
@@ -56,6 +58,7 @@
       max_capacity_per_slot: 0, // 0 = unlimited / not set
       slot_length_minutes: 15,
       walkup_mode: false,
+      slots: [], // event schedule: [{start:"HH:MM", end:"HH:MM"}, ...]
       updated_at: new Date(0).toISOString(),
       updated_by: "init",
     };
@@ -146,6 +149,7 @@
       setOnline(true);
       if (data.unchanged) { LS.lastSync = iso(nowDate()); renderStatus(); return; }
 
+      if (data.event_date) LS.eventDate = data.event_date;
       await replaceTickets(data.tickets || []);
       await putRedemptions(data.redemptions || []);
 
@@ -209,6 +213,7 @@
         max_capacity_per_slot: s.max_capacity_per_slot,
         slot_length_minutes: s.slot_length_minutes,
         walkup_mode: s.walkup_mode,
+        slots: s.slots || [],
         updated_at: s.updated_at,
         updated_by: s.updated_by,
       }),
@@ -391,18 +396,47 @@
     renderStats();
   }
 
+  // ------------------------------------------------------------- slot helpers
+  function pad2(n) { return ("0" + n).slice(-2); }
+  function hhmmToMin(s) { const p = String(s || "").split(":"); return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0); }
+  function minToHHMM(m) { m = ((m % 1440) + 1440) % 1440; return pad2(Math.floor(m / 60)) + ":" + pad2(m % 60); }
+
+  // Build a Date for an "HH:MM" on the event day (falls back to today when unknown).
+  function slotDate(hhmm) {
+    const base = LS.eventDate ? new Date(LS.eventDate + "T00:00:00") : new Date();
+    const mins = hhmmToMin(hhmm);
+    return new Date(base.getFullYear(), base.getMonth(), base.getDate(), Math.floor(mins / 60), mins % 60, 0, 0);
+  }
+
   // -------------------------------------------------------------------- stats
   // Real wall-clock throughput window (NOT offset-adjusted): capacity is a physical limit
   // of the cable car right now, so we bucket actual scans into fixed windows anchored at
-  // local midnight (e.g. 15-min -> :00/:15/:30/:45).
-  function throughputWindow(now, lenMin) {
+  // local midnight (e.g. 15-min -> :00/:15/:30/:45). Used when no schedule is defined.
+  function autoWindow(now, lenMin) {
     const len = Math.max(1, lenMin || 15);
     const minsOfDay = now.getHours() * 60 + now.getMinutes();
     const startMin = Math.floor(minsOfDay / len) * len;
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
     start.setMinutes(startMin);
     const end = new Date(start.getTime() + len * 60000);
-    return { start, end };
+    return { start, end, label: minToHHMM(startMin) + "–" + minToHHMM(startMin + len) };
+  }
+
+  // The configured slot (real wall-clock) that `now` falls in, or null if between slots.
+  function scheduleWindow(now) {
+    const slots = (LS.settings.slots || []).slice().sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    for (const s of slots) {
+      const start = slotDate(s.start), end = slotDate(s.end);
+      if (now >= start && now < end) return { start, end, label: s.start + "–" + s.end };
+    }
+    return null;
+  }
+
+  // Which window capacity is measured against right now.
+  function capacityWindow(now) {
+    const slots = LS.settings.slots || [];
+    if (slots.length) return scheduleWindow(now); // may be null between slots
+    return autoWindow(now, LS.settings.slot_length_minutes);
   }
 
   async function computeStats() {
@@ -428,14 +462,16 @@
       if (now >= end && !isScanned) noShows++;
     }
 
-    // Capacity / throughput in the current real-time window.
+    // Capacity / throughput in the current real-time window (configured slot if any).
     const cap = Number(settings.max_capacity_per_slot) || 0;
-    const win = throughputWindow(now, settings.slot_length_minutes);
+    const win = capacityWindow(now);
     let capUsed = 0;
-    for (const r of redemptions) {
-      if (r.result !== "valid" && r.result !== "override") continue;
-      const at = new Date(r.scanned_at);
-      if (at >= win.start && at < win.end) capUsed++;
+    if (win) {
+      for (const r of redemptions) {
+        if (r.result !== "valid" && r.result !== "override") continue;
+        const at = new Date(r.scanned_at);
+        if (at >= win.start && at < win.end) capUsed++;
+      }
     }
 
     return {
@@ -452,7 +488,8 @@
       cap: cap,
       capUsed: capUsed,
       capPct: cap > 0 ? Math.round((capUsed / cap) * 100) : 0,
-      capWindow: fmtSlot(win.start.toISOString(), win.end.toISOString()),
+      capWindow: win ? win.label : "no active slot",
+      hasSchedule: (settings.slots || []).length > 0,
     };
   }
 
@@ -517,6 +554,68 @@
     $("set-grace-after").value = s.grace_after_minutes || 0;
     const wb = $("walkup-banner");
     if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
+    renderSlots();
+  }
+
+  function renderSlots() {
+    const slots = (LS.settings.slots || []).slice().sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    $("slot-count").textContent = slots.length ? slots.length + " slot(s)" : "none — using auto " + (LS.settings.slot_length_minutes || 15) + "-min windows";
+    const ul = $("slot-list");
+    ul.innerHTML = "";
+    slots.forEach((sl, i) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.textContent = sl.start + " – " + sl.end;
+      const del = document.createElement("button");
+      del.className = "btn-x"; del.textContent = "✕";
+      del.onclick = () => deleteSlot(i);
+      li.appendChild(span); li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  function setSlots(slots) {
+    slots.sort((a, b) => hhmmToMin(a.start) - hhmmToMin(b.start));
+    touchSettings((s) => { s.slots = slots; });
+  }
+
+  function generateSlots() {
+    const start = hhmmToMin($("gen-start").value || "09:00");
+    const len = Math.max(1, parseInt($("gen-len").value || LS.settings.slot_length_minutes || "15", 10));
+    let count = 0;
+    if ($("gen-count").value) {
+      count = Math.max(0, parseInt($("gen-count").value, 10) || 0);
+    } else if ($("gen-end").value) {
+      count = Math.max(0, Math.floor((hhmmToMin($("gen-end").value) - start) / len));
+    }
+    if (!count) { alert("Enter an end time or a number of slots."); return; }
+    const slots = [];
+    for (let i = 0; i < count; i++) {
+      const a = start + i * len;
+      slots.push({ start: minToHHMM(a), end: minToHHMM(a + len) });
+    }
+    // Keep the capacity window length in step with the generated slot length.
+    touchSettings((s) => { s.slots = slots; s.slot_length_minutes = len; });
+  }
+
+  function addSlotManual() {
+    const a = $("add-slot-start").value, b = $("add-slot-end").value;
+    if (!a || !b) { alert("Enter both a start and end time."); return; }
+    const slots = (LS.settings.slots || []).slice();
+    slots.push({ start: a, end: b });
+    setSlots(slots);
+    $("add-slot-start").value = ""; $("add-slot-end").value = "";
+  }
+
+  function deleteSlot(i) {
+    const slots = (LS.settings.slots || []).slice();
+    slots.splice(i, 1);
+    setSlots(slots);
+  }
+
+  function clearSlots() {
+    if (!confirm("Remove all configured slots?")) return;
+    setSlots([]);
   }
 
   function renderDelayButtons() {
@@ -614,6 +713,11 @@
     numEdit("set-slotlen", "slot_length_minutes", 1);
     numEdit("set-grace-before", "grace_before_minutes", 0);
     numEdit("set-grace-after", "grace_after_minutes", 0);
+
+    // Time-slot schedule.
+    $("btn-gen-slots").onclick = generateSlots;
+    $("btn-add-slot").onclick = addSlotManual;
+    $("btn-clear-slots").onclick = clearSlots;
 
     window.addEventListener("online", () => { setOnline(true); syncNow(); });
     window.addEventListener("offline", () => setOnline(false));

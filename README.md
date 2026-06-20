@@ -82,29 +82,57 @@ applies offline immediately, last-write-wins on reconnect):
 - **Max capacity per window** (riders; 0 = unlimited)
 - **Window length** (minutes)
 - **Grace before / after** (minutes)
+- **Time slots** — the event schedule (see below)
 
-## Install (Proxmox LXC, Debian/Ubuntu)
+### Time slots
+
+Define the slots in the **Settings** tab — two ways, freely mixable:
+
+- **Generate:** first start time + slot length + (end time **or** number of slots) →
+  builds the whole list (e.g. 15-min slots `09:00–09:15`, `09:15–09:30`, …).
+- **Manual:** add individual slots by start/end time, or delete any slot.
+
+The schedule defines the **capacity window** (the current configured slot is what
+capacity is measured against; if none is defined it falls back to fixed clock-aligned
+windows of the configured length). Slots **sync to every phone and apply offline
+immediately** — if there's no server connection, the change is stored locally on the PWA
+and pushed on reconnect.
+
+## Install & update (one command)
+
+On a fresh Debian/Ubuntu **Proxmox LXC**, run:
 
 ```bash
-git clone <this repo> ticket-manager && cd ticket-manager
-sudo bash deploy/install.sh
+curl -fsSL https://raw.githubusercontent.com/angeeinstein/ticket-manager/main/deploy/bootstrap.sh | sudo bash
 ```
 
-The script installs system deps (incl. `libzbar0`), a Python venv, a `ticket-checker`
-systemd service (uvicorn on `127.0.0.1:8080`), and `cloudflared`. It generates a
-**scanner token** and prints it — you enter that token in the phone app's Settings.
+This bootstraps everything: it installs `git`/`curl`, clones the repo to
+`/opt/ticket-checker/src`, then runs the full installer, which:
 
-Then connect the tunnel (the script prints the exact commands). In short:
+- installs system deps (incl. `libzbar0`), a Python venv, and the dependencies;
+- **interactively asks** for configuration (event date, scanner token — generated or your
+  own, walk-up mode, capacity, slot length, port);
+- installs and starts the `ticket-checker` **systemd** service (uvicorn on
+  `127.0.0.1:<port>`) and health-checks it;
+- installs `cloudflared` and walks you through the **Cloudflare Tunnel** (token connector,
+  guided named tunnel, or skip).
+
+**To update later, run the exact same command.** The bootstrap re-fetches the latest code
+from GitHub and the installer detects the existing install, refreshes the app + deps, and
+restarts the service — keeping your `.env`. Add flags after `bash -s --`:
 
 ```bash
-# Cloudflare Zero Trust dashboard: create a tunnel + public hostname -> http://127.0.0.1:8080
-sudo cloudflared service install <CONNECTOR_TOKEN>
-sudo systemctl enable --now cloudflared
+# Update from a specific branch, or re-run the config prompts:
+curl -fsSL .../deploy/bootstrap.sh | sudo BRANCH=main bash
+curl -fsSL .../deploy/bootstrap.sh | sudo bash -s -- --reconfigure
 ```
 
-**Recommended:** put **Cloudflare Access** in front of the hostname in addition to the
-scanner token. Edit `/opt/ticket-checker/.env` to set `EVENT_DATE` and other options, then
-`sudo systemctl restart ticket-checker`.
+Non-interactive: append `-s -- --yes` (accepts defaults, generates a token, skips the
+tunnel). Private repo: pass `GITHUB_TOKEN=...` before `bash`.
+
+You can also run it from a manual checkout: `sudo bash deploy/install.sh`.
+
+**Recommended:** also put **Cloudflare Access** (Zero Trust) in front of the hostname.
 
 ## Using it
 

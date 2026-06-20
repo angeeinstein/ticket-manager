@@ -84,12 +84,18 @@ class DelayUpdate(BaseModel):
     updated_by: str  # device id
 
 
+class Slot(BaseModel):
+    start: str  # "HH:MM"
+    end: str    # "HH:MM"
+
+
 class SettingsUpdate(BaseModel):
     grace_before_minutes: int = 0
     grace_after_minutes: int = 0
     max_capacity_per_slot: int = 0   # 0 = unlimited / not set
     slot_length_minutes: int = 15
     walkup_mode: bool = False
+    slots: list[Slot] = []           # the event time-slot schedule
     updated_at: str  # ISO datetime — drives last-write-wins (own settings timestamp)
     updated_by: str  # device id
 
@@ -183,19 +189,11 @@ def put_settings(update: SettingsUpdate) -> dict:
         max_capacity_per_slot=update.max_capacity_per_slot,
         slot_length_minutes=update.slot_length_minutes,
         walkup_mode=update.walkup_mode,
+        slots=[s.model_dump() for s in update.slots],
         updated_at=update.updated_at,
         updated_by=update.updated_by,
     )
-    return {
-        "grace_before_minutes": int(state.get("grace_before_minutes", "0")),
-        "grace_after_minutes": int(state.get("grace_after_minutes", "0")),
-        "max_capacity_per_slot": int(state.get("max_capacity_per_slot", "0")),
-        "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
-        "walkup_mode": state.get("walkup_mode", "0") == "1",
-        "updated_at": state.get("settings_updated_at"),
-        "updated_by": state.get("settings_updated_by"),
-        "data_version": int(state.get("data_version", "1")),
-    }
+    return db.sync_snapshot()["settings"] | {"data_version": int(state.get("data_version", "1"))}
 
 
 @app.post("/api/redeem", dependencies=[Depends(require_token)])

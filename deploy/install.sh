@@ -1,28 +1,95 @@
 #!/usr/bin/env bash
 #
-# Install the Cable Car Ticket Checker on a Debian/Ubuntu Proxmox LXC and expose it via a
-# Cloudflare Tunnel. Idempotent — safe to re-run to update.
+# Comprehensive installer / updater for the Cable Car Ticket Checker on a Debian/Ubuntu
+# Proxmox LXC, exposed via a Cloudflare Tunnel.
 #
-# Run as root from inside the cloned repo:   sudo bash deploy/install.sh
+# Usually invoked through the one-command bootstrap (see deploy/bootstrap.sh):
+#   curl -fsSL https://raw.githubusercontent.com/angeeinstein/ticket-manager/main/deploy/bootstrap.sh | sudo bash
 #
+# Or run directly from a cloned repo:   sudo bash deploy/install.sh
+#
+# It is idempotent: the FIRST run installs and prompts for configuration; a later run with
+# updated code just refreshes the app + dependencies and restarts the service, keeping your
+# .env. Pass --reconfigure to re-run the configuration prompts on an existing install.
+#
+# Flags:
+#   --reconfigure     re-ask all configuration questions (rewrites .env), even on update
+#   --no-tunnel       skip the Cloudflare Tunnel step
+#   --yes             non-interactive: accept all defaults, generate a token, skip tunnel
 set -euo pipefail
 
 APP_USER="ticketchecker"
 APP_DIR="/opt/ticket-checker"
 SERVICE="ticket-checker"
-# Repo root = parent of this script's directory.
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+RECONFIGURE=0
+DO_TUNNEL=1
+ASSUME_YES=0
+for arg in "$@"; do
+  case "$arg" in
+    --reconfigure) RECONFIGURE=1 ;;
+    --no-tunnel)   DO_TUNNEL=0 ;;
+    --yes|-y)      ASSUME_YES=1 ;;
+  esac
+done
 
 log()  { echo -e "\033[1;36m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m!!\033[0m $*"; }
+err()  { echo -e "\033[1;31m!!\033[0m $*" >&2; }
+hr()   { echo "------------------------------------------------------------------------"; }
 
-if [[ $EUID -ne 0 ]]; then echo "Please run as root (sudo)."; exit 1; fi
+if [[ $EUID -ne 0 ]]; then err "Please run as root (sudo)."; exit 1; fi
+
+# --------------------------------------------------------- interactive helpers
+# Read from /dev/tty so prompts work even when the parent was piped from curl. With --yes
+# (or no tty) we silently fall back to the default.
+ask() { # ask "Question" "default" -> echoes the answer
+  local q="$1" def="${2:-}" ans=""
+  if [[ $ASSUME_YES -eq 0 && -r /dev/tty ]]; then
+    if [[ -n "$def" ]]; then read -r -p "$q [$def]: " ans </dev/tty || true
+    else read -r -p "$q: " ans </dev/tty || true; fi
+  fi
+  echo "${ans:-$def}"
+}
+ask_secret() { # ask_secret "Question" -> echoes the (hidden) answer
+  local q="$1" ans=""
+  if [[ $ASSUME_YES -eq 0 && -r /dev/tty ]]; then
+    read -r -s -p "$q: " ans </dev/tty || true; echo >/dev/tty
+  fi
+  echo "$ans"
+}
+yesno() { # yesno "Question" "Y|N(default)" -> 0 if yes
+  local def="${2:-Y}" ans
+  ans="$(ask "$1 (y/n)" "$def")"
+  [[ "$ans" =~ ^[Yy] ]]
+}
+menu() { # menu "Title" opt1 opt2 ...  -> echoes the chosen NUMBER (default 1)
+  local title="$1"; shift
+  if [[ $ASSUME_YES -eq 1 || ! -r /dev/tty ]]; then echo 1; return; fi
+  { echo "$title"; local i=1; for o in "$@"; do echo "  $i) $o"; i=$((i+1)); done; } >/dev/tty
+  local pick; read -r -p "Choose [1]: " pick </dev/tty || true
+  [[ "$pick" =~ ^[0-9]+$ ]] || pick=1
+  echo "$pick"
+}
+
+# ------------------------------------------------------------------- mode banner
+MODE="install"
+[[ -f "$APP_DIR/.env" ]] && MODE="update"
+hr
+if [[ "$MODE" == "update" ]]; then
+  log "Existing installation detected in $APP_DIR — UPDATE mode"
+  [[ $RECONFIGURE -eq 1 ]] && warn "--reconfigure given: configuration prompts will run again"
+else
+  log "Fresh installation"
+fi
+hr
 
 # --------------------------------------------------------------- 1. system deps
 log "Installing system dependencies"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y python3 python3-venv python3-pip build-essential libzbar0 git curl ca-certificates
+apt-get install -y python3 python3-venv python3-pip build-essential libzbar0 git curl ca-certificates rsync
 
 # ------------------------------------------------------------------ 2. app user
 if ! id "$APP_USER" &>/dev/null; then
@@ -30,48 +97,93 @@ if ! id "$APP_USER" &>/dev/null; then
   useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
 fi
 
-# --------------------------------------------------------------- 3. app files
-log "Copying application to $APP_DIR"
+# ---------------------------------------------------------------- 3. app files
+log "Syncing application code to $APP_DIR"
 mkdir -p "$APP_DIR"
-# Copy code (backend, frontend, requirements). Preserve runtime data/ and .env.
 rsync -a --delete \
-  --exclude '.git' --exclude 'data' --exclude 'inbox' --exclude '.env' --exclude 'venv' \
+  --exclude '.git' --exclude 'data' --exclude 'inbox' --exclude '.env' --exclude 'venv' --exclude 'src' \
   "$SRC_DIR/backend" "$SRC_DIR/frontend" "$APP_DIR/"
 cp "$SRC_DIR/backend/requirements.txt" "$APP_DIR/requirements.txt"
-
 mkdir -p "$APP_DIR/data" "$APP_DIR/inbox/processed/needs_review"
 
-# .env
-if [[ ! -f "$APP_DIR/.env" ]]; then
-  log "Creating .env with a generated scanner token"
-  TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-  sed "s|^SCANNER_TOKEN=.*|SCANNER_TOKEN=${TOKEN}|; s|^EVENT_DATE=.*|EVENT_DATE=$(date +%F)|" \
-    "$SRC_DIR/deploy/.env.example" > "$APP_DIR/.env"
-  warn "Your scanner token (enter this in the phone app Settings):  ${TOKEN}"
+# ---------------------------------------------------------------- 4. .env config
+write_env() {
+  local token="$1" event_date="$2" port="$3" walkup="$4" capacity="$5" slotlen="$6"
+  sed -e "s|^SCANNER_TOKEN=.*|SCANNER_TOKEN=${token}|" \
+      -e "s|^EVENT_DATE=.*|EVENT_DATE=${event_date}|" \
+      -e "s|^PORT=.*|PORT=${port}|" \
+      -e "s|^WALKUP_MODE=.*|WALKUP_MODE=${walkup}|" \
+      -e "s|^MAX_CAPACITY_PER_SLOT=.*|MAX_CAPACITY_PER_SLOT=${capacity}|" \
+      -e "s|^SLOT_LENGTH_MINUTES=.*|SLOT_LENGTH_MINUTES=${slotlen}|" \
+      "$SRC_DIR/deploy/.env.example" > "$APP_DIR/.env"
+}
+
+if [[ "$MODE" == "install" || $RECONFIGURE -eq 1 ]]; then
+  log "Configuration"
+  # Preserve current values as defaults when reconfiguring.
+  cur() { [[ -f "$APP_DIR/.env" ]] && grep -E "^$1=" "$APP_DIR/.env" | head -1 | cut -d= -f2- || true; }
+  def_date="$(cur EVENT_DATE)";        def_date="${def_date:-$(date +%F)}"
+  def_port="$(cur PORT)";              def_port="${def_port:-8080}"
+  def_walkup="$(cur WALKUP_MODE)";     def_walkup="${def_walkup:-false}"
+  def_cap="$(cur MAX_CAPACITY_PER_SLOT)"; def_cap="${def_cap:-0}"
+  def_slot="$(cur SLOT_LENGTH_MINUTES)";  def_slot="${def_slot:-15}"
+  def_token="$(cur SCANNER_TOKEN)"
+
+  EVENT_DATE="$(ask "Event date (YYYY-MM-DD)" "$def_date")"
+
+  # Scanner token
+  if [[ -n "$def_token" && "$def_token" != changeme* ]] && yesno "Keep the existing scanner token?" "Y"; then
+    TOKEN="$def_token"
+  elif yesno "Auto-generate a strong scanner token?" "Y"; then
+    TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  else
+    TOKEN="$(ask_secret "Enter the scanner token")"; [[ -n "$TOKEN" ]] || TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  fi
+
+  if yesno "Start with WALK-UP mode ON (record unknown tickets, no import needed)?" \
+           "$([[ "$def_walkup" == true ]] && echo Y || echo N)"; then WALKUP=true; else WALKUP=false; fi
+  CAPACITY="$(ask "Max riders per window (0 = unlimited)" "$def_cap")"
+  SLOTLEN="$(ask "Window / slot length in minutes" "$def_slot")"
+  PORT="$(ask "Local port for the backend" "$def_port")"
+
+  write_env "$TOKEN" "$EVENT_DATE" "$PORT" "$WALKUP" "$CAPACITY" "$SLOTLEN"
+  log "Wrote $APP_DIR/.env"
+  warn "Scanner token (enter this in the phone app → Settings):  ${TOKEN}"
 else
-  log ".env already exists — leaving it untouched"
+  log "Keeping existing $APP_DIR/.env (use --reconfigure to change it)"
+  # Make sure any newly-added keys exist (merge missing lines from the example).
+  while IFS= read -r line; do
+    key="${line%%=*}"
+    [[ "$line" == \#* || -z "$key" ]] && continue
+    grep -qE "^${key}=" "$APP_DIR/.env" || echo "$line" >> "$APP_DIR/.env"
+  done < "$SRC_DIR/deploy/.env.example"
 fi
 
-# ------------------------------------------------------------- 4. python venv
-log "Setting up Python virtualenv"
-if [[ ! -d "$APP_DIR/venv" ]]; then
-  python3 -m venv "$APP_DIR/venv"
-fi
-"$APP_DIR/venv/bin/pip" install --upgrade pip
-"$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt"
+# --------------------------------------------------------------- 5. python venv
+log "Setting up the Python virtualenv and dependencies"
+[[ -d "$APP_DIR/venv" ]] || python3 -m venv "$APP_DIR/venv"
+"$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
+"$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
-# -------------------------------------------------------------- 5. systemd unit
-log "Installing systemd service"
+# -------------------------------------------------------------- 6. systemd unit
+log "Installing/refreshing the systemd service"
 cp "$SRC_DIR/deploy/ticket-checker.service" "/etc/systemd/system/${SERVICE}.service"
 systemctl daemon-reload
-systemctl enable "$SERVICE"
+systemctl enable "$SERVICE" >/dev/null 2>&1 || true
 systemctl restart "$SERVICE"
 sleep 2
-systemctl --no-pager --lines=5 status "$SERVICE" || true
 
-# --------------------------------------------------------------- 6. cloudflared
+PORT_VAL="$(grep -E '^PORT=' "$APP_DIR/.env" | cut -d= -f2)"
+if curl -fsS "http://127.0.0.1:${PORT_VAL}/api/health" >/dev/null 2>&1; then
+  log "Backend healthy on 127.0.0.1:${PORT_VAL}"
+else
+  err "Backend did not answer on 127.0.0.1:${PORT_VAL}. Recent logs:"
+  journalctl -u "$SERVICE" --no-pager --lines=20 || true
+fi
+
+# --------------------------------------------------------------- 7. cloudflared
 if ! command -v cloudflared &>/dev/null; then
   log "Installing cloudflared"
   mkdir -p /usr/share/keyrings
@@ -84,33 +196,74 @@ else
   log "cloudflared already installed"
 fi
 
-PORT_VAL="$(grep -E '^PORT=' "$APP_DIR/.env" | cut -d= -f2)"
+setup_tunnel() {
+  local choice
+  choice="$(menu "Cloudflare Tunnel setup:" \
+    "Token connector (simplest — paste a connector token)" \
+    "Named tunnel (guided: login in a browser, create + route DNS)" \
+    "Skip for now (I'll do it later)")"
+  case "$choice" in
+    1)
+      local token; token="$(ask_secret "Paste the Cloudflare connector token")"
+      if [[ -z "$token" ]]; then warn "No token entered — skipping."; return; fi
+      cloudflared service install "$token"
+      systemctl enable --now cloudflared
+      log "cloudflared connector installed. Map the public hostname to http://127.0.0.1:${PORT_VAL} in the dashboard."
+      ;;
+    2)
+      local tname host
+      tname="$(ask "Tunnel name" "ticket-checker")"
+      host="$(ask "Public hostname (e.g. tickets.example.com)" "")"
+      log "A browser login URL will be printed — open it and authorize."
+      cloudflared tunnel login </dev/tty
+      cloudflared tunnel create "$tname" || warn "Tunnel may already exist; continuing."
+      local cred uuid
+      uuid="$(cloudflared tunnel list 2>/dev/null | awk -v n="$tname" '$2==n {print $1}' | head -1)"
+      cred="$(ls /root/.cloudflared/${uuid}.json 2>/dev/null || ls /root/.cloudflared/*.json 2>/dev/null | head -1)"
+      mkdir -p /etc/cloudflared
+      cat > /etc/cloudflared/config.yml <<YML
+tunnel: ${uuid:-$tname}
+credentials-file: ${cred}
+ingress:
+  - hostname: ${host}
+    service: http://127.0.0.1:${PORT_VAL}
+  - service: http_status:404
+YML
+      [[ -n "$host" ]] && cloudflared tunnel route dns "$tname" "$host" || true
+      cloudflared service install
+      systemctl enable --now cloudflared
+      log "Named tunnel '${tname}' configured for https://${host}"
+      ;;
+    *)
+      warn "Skipping tunnel setup."
+      ;;
+  esac
+}
+
+if [[ $DO_TUNNEL -eq 1 && $ASSUME_YES -eq 0 ]]; then
+  if systemctl is-active --quiet cloudflared 2>/dev/null; then
+    log "cloudflared service already running"
+    if [[ $RECONFIGURE -eq 1 ]] && yesno "Reconfigure the Cloudflare Tunnel?" "N"; then setup_tunnel; fi
+  elif [[ "$MODE" == "install" || $RECONFIGURE -eq 1 ]]; then
+    if yesno "Set up the Cloudflare Tunnel now?" "Y"; then setup_tunnel; fi
+  fi
+fi
+
+# --------------------------------------------------------------------- 8. summary
+hr
+log "Done (${MODE})."
 cat <<EOF
+Backend:       http://127.0.0.1:${PORT_VAL}
+Health check:  curl -s http://127.0.0.1:${PORT_VAL}/api/health
+Service:       systemctl status ${SERVICE}    |    journalctl -u ${SERVICE} -f
+Config:        ${APP_DIR}/.env   (re-run with --reconfigure to change)
 
-Backend is running on 127.0.0.1:${PORT_VAL} (see .env).
-Health check:   curl -s http://127.0.0.1:${PORT_VAL}/api/health
+Phone setup: open your public HTTPS hostname, go to Settings, paste the scanner token,
+tap "Save token & sync", then "Add to home screen". Configure the time slots there too.
 
-------------------------------------------------------------------------
-NEXT: connect the Cloudflare Tunnel (gives you a public HTTPS URL the phone uses)
+To UPDATE later, just run the same one-command installer again:
+  curl -fsSL https://raw.githubusercontent.com/angeeinstein/ticket-manager/main/deploy/bootstrap.sh | sudo bash
 
-Option A — token connector (simplest):
-  1. In Cloudflare Zero Trust dashboard: Networks > Tunnels > Create tunnel.
-  2. Add a public hostname (e.g. tickets.example.com) -> service http://127.0.0.1:${PORT_VAL}
-  3. Copy the connector token, then on this box run:
-         sudo cloudflared service install TOKEN
-         sudo systemctl enable --now cloudflared
-
-Option B — named tunnel (config file):
-  sudo cloudflared tunnel login
-  sudo cloudflared tunnel create ticket-checker
-  sudo cp ${SRC_DIR}/deploy/cloudflared-config.example.yml /etc/cloudflared/config.yml   # then edit
-  sudo cloudflared tunnel route dns ticket-checker tickets.example.com
-  sudo cloudflared service install && sudo systemctl enable --now cloudflared
-
-STRONGLY RECOMMENDED: put Cloudflare Access (Zero Trust) in front of the hostname so only
-your operators can reach it, in addition to the scanner token.
-
-Then open https://tickets.example.com on the Android phone, enter the scanner token in
-Settings, and "Add to home screen".
-------------------------------------------------------------------------
+RECOMMENDED: also put Cloudflare Access (Zero Trust) in front of the hostname.
 EOF
+hr

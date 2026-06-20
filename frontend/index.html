@@ -135,6 +135,34 @@
       </label>
     </div>
 
+    <h2>Time slots <span id="slot-count" class="muted"></span></h2>
+    <p class="muted">Define the event's slots — used for capacity stats and (in walk-up mode)
+      the current slot. Works with or without a server connection; offline changes apply
+      locally and sync later.</p>
+    <div class="row wrap">
+      <label class="field" style="flex:1"><span>First start</span>
+        <input id="gen-start" class="input" type="time" value="09:00" /></label>
+      <label class="field" style="flex:1"><span>Slot length (min)</span>
+        <input id="gen-len" class="input" type="number" inputmode="numeric" min="1" value="15" /></label>
+    </div>
+    <div class="row wrap">
+      <label class="field" style="flex:1"><span>End by (optional)</span>
+        <input id="gen-end" class="input" type="time" /></label>
+      <label class="field" style="flex:1"><span>or # of slots</span>
+        <input id="gen-count" class="input" type="number" inputmode="numeric" min="1" /></label>
+    </div>
+    <div class="row"><button id="btn-gen-slots" class="btn btn-ok">Generate slots</button></div>
+
+    <div class="row wrap" style="align-items:flex-end">
+      <label class="field" style="flex:1"><span>Add slot — start</span>
+        <input id="add-slot-start" class="input" type="time" /></label>
+      <label class="field" style="flex:1"><span>end</span>
+        <input id="add-slot-end" class="input" type="time" /></label>
+      <button id="btn-add-slot" class="btn">Add</button>
+    </div>
+    <ul id="slot-list" class="slot-list"></ul>
+    <div class="row"><button id="btn-clear-slots" class="btn">Clear all slots</button></div>
+
     <h2>Access &amp; sync</h2>
     <label class="field">
       <span>Scanner token</span>

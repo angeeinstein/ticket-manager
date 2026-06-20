@@ -27,6 +27,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _load_slots(raw: str) -> list:
+    """Parse the stored slots JSON, tolerating bad data rather than breaking sync."""
+    try:
+        val = json.loads(raw or "[]")
+        return val if isinstance(val, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def init_db(
     db_path: Path,
     event_date: str,
@@ -101,6 +110,7 @@ def _seed_state(
         "max_capacity_per_slot": str(max_capacity_per_slot),
         "slot_length_minutes": str(slot_length_minutes),
         "walkup_mode": "1" if walkup_mode else "0",
+        "slots": "[]",  # JSON list of {"start":"HH:MM","end":"HH:MM"} — the event schedule
         "settings_updated_at": _now_iso(),
         "settings_updated_by": "server",
     }
@@ -189,6 +199,7 @@ def update_settings_state(
     max_capacity_per_slot: int,
     slot_length_minutes: int,
     walkup_mode: bool,
+    slots: list | None,
     updated_at: str,
     updated_by: str,
 ) -> dict:
@@ -207,6 +218,7 @@ def update_settings_state(
                 "max_capacity_per_slot": str(max(0, int(max_capacity_per_slot))),
                 "slot_length_minutes": str(max(1, int(slot_length_minutes))),
                 "walkup_mode": "1" if walkup_mode else "0",
+                "slots": json.dumps(slots if slots is not None else []),
                 "settings_updated_at": updated_at,
                 "settings_updated_by": updated_by,
             }
@@ -321,6 +333,7 @@ def sync_snapshot() -> dict[str, Any]:
             "max_capacity_per_slot": int(state.get("max_capacity_per_slot", "0")),
             "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
             "walkup_mode": state.get("walkup_mode", "0") == "1",
+            "slots": _load_slots(state.get("slots", "[]")),
             "updated_at": state.get("settings_updated_at"),
             "updated_by": state.get("settings_updated_by"),
         },
