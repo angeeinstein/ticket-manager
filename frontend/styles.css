@@ -34,7 +34,7 @@ body {
 .badge-sync { background: var(--card2); color: var(--text); }
 .badge-bad { background: var(--bad); color: #fff; }
 
-.tab { display: none; padding: 12px; }
+.tab { display: none; padding: 10px 12px; }
 .tab.active { display: block; }
 
 /* compact stat strip */
@@ -69,9 +69,9 @@ body {
 .btn-x { background: none; border: none; color: var(--bad); font-size: 1.1rem; padding: 2px 8px; }
 
 /* result */
-.result { margin: 12px 0; border-radius: 14px; padding: 18px; text-align: center; border: 2px solid var(--line); background: var(--card); }
-.result-status { font-size: 1.8rem; font-weight: 800; letter-spacing: .5px; }
-.result-detail { color: var(--muted); margin-top: 6px; }
+.result { margin: 10px 0; border-radius: 14px; padding: 12px; text-align: center; border: 2px solid var(--line); background: var(--card); }
+.result-status { font-size: 1.5rem; font-weight: 800; letter-spacing: .5px; }
+.result-detail { color: var(--muted); margin-top: 4px; font-size: .9rem; }
 .result-idle { border-color: var(--line); }
 .result-valid { background: #052e16; border-color: var(--ok); }
 .result-valid .result-status { color: #4ade80; }
@@ -83,15 +83,15 @@ body {
 .override-row { margin-top: 12px; }
 
 /* camera — capped height so the scan screen stays scroll-free on phones */
-.camera-wrap { background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 4 / 3; max-height: 38vh; display: flex; }
+.camera-wrap { background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 10; max-height: 28vh; display: flex; }
 #video { width: 100%; height: 100%; object-fit: cover; }
 
 /* delay */
-.delay-panel { margin-top: 14px; background: var(--card); border-radius: 12px; padding: 12px; }
-.delay-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 8px; }
+.delay-panel { margin-top: 10px; background: var(--card); border-radius: 12px; padding: 10px; }
+.delay-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
 
 /* generic */
-.row { display: flex; gap: 8px; margin-top: 10px; }
+.row { display: flex; gap: 8px; margin-top: 8px; }
 .row.wrap { flex-wrap: wrap; }
 .btn {
   flex: 1; min-width: 90px; padding: 14px 12px; border: none; border-radius: 10px;

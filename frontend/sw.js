@@ -9,7 +9,7 @@
  * API calls (/api/*) are never handled here — they go straight to the network and the app
  * handles offline itself via IndexedDB.
  */
-const CACHE = "ticket-checker-v6";
+const CACHE = "ticket-checker-v7";
 const SHELL = [
   "./",
   "index.html",

@@ -302,21 +302,35 @@
   // ------------------------------------------------------------------ scanning
   let detector = null;
   let stream = null;
-  let scanLoop = null;
+  let scanning = false;
   let lastHandled = { value: null, at: 0 };
 
   async function startCamera() {
     if (stream) return;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      // Prefer the rear camera at a decent resolution — enough detail for small 1-D
+      // barcodes without making each detect() call slow.
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
       const video = $("video");
       video.srcObject = stream;
+      video.setAttribute("playsinline", "");
       await video.play();
       $("btn-camera").textContent = "Stop camera";
       if ("BarcodeDetector" in window) {
-        const formats = await window.BarcodeDetector.getSupportedFormats();
-        detector = new window.BarcodeDetector({ formats: formats });
-        scanLoop = setInterval(scanTick, 250);
+        // Request every format the device supports (QR + the common 1-D symbologies:
+        // code_128, ean_13/8, upc_a/e, code_39, itf, codabar, …) so any ticket scans.
+        let formats;
+        try { formats = await window.BarcodeDetector.getSupportedFormats(); } catch (e) { formats = undefined; }
+        detector = formats && formats.length ? new window.BarcodeDetector({ formats: formats }) : new window.BarcodeDetector();
+        scanning = true;
+        requestAnimationFrame(scanFrame); // self-scheduling: scans as fast as the device allows
       } else {
         showResult("info", "Camera scanning not supported", "Use manual entry below (BarcodeDetector unavailable on this browser).", null);
       }
@@ -326,20 +340,24 @@
   }
 
   function stopCamera() {
-    if (scanLoop) { clearInterval(scanLoop); scanLoop = null; }
+    scanning = false;
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     detector = null;
     $("btn-camera").textContent = "Start camera";
   }
 
-  async function scanTick() {
-    if (!detector) return;
+  // Continuous detect loop. Awaiting each detect() before scheduling the next frame avoids
+  // overlapping calls (which would slow detection), so it runs at the device's max rate.
+  async function scanFrame() {
+    if (!scanning || !detector) return;
     const video = $("video");
-    if (!video.videoWidth) return;
-    try {
-      const codes = await detector.detect(video);
-      if (codes && codes.length) handleScan(codes[0].rawValue);
-    } catch (e) { /* transient detect errors are expected */ }
+    if (video && video.readyState >= 2 && video.videoWidth) {
+      try {
+        const codes = await detector.detect(video);
+        if (codes && codes.length) handleScan(codes[0].rawValue);
+      } catch (e) { /* transient detect errors are expected */ }
+    }
+    if (scanning) requestAnimationFrame(scanFrame);
   }
 
   let pendingOverride = null; // {barcode}
@@ -789,6 +807,9 @@
     on("btn-upload", "click", () => uploadPdfs($("pdf-input").files));
     on("btn-sync", "click", () => syncNow());
     on("btn-save-token", "click", () => { LS.token = $("token-input").value.trim(); syncNow(); });
+    on("btn-reset-app", "click", () => {
+      if (confirm("Reset the app? Clears the cached version and reloads the latest. Your token and settings stay.")) resetApp(true);
+    });
 
     // Settings — each change updates the synced settings object (last-write-wins).
     on("set-walkup", "change", (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; }));
@@ -828,7 +849,26 @@
     }
   }
 
+  // Hard reset: unregister the service worker and wipe all caches so a stuck/old build is
+  // discarded and the latest is fetched fresh. Keeps local data (token/settings/scan queue).
+  async function resetApp(reload) {
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (e) { console.warn("reset failed", e); }
+    if (reload) location.replace(location.pathname); // clean URL, fetch everything fresh
+  }
+
   async function main() {
+    // Recovery entry point: visiting /?reset clears the service worker + caches and reloads.
+    if (/[?&]reset\b/.test(location.search)) { await resetApp(true); return; }
+
     registerSW();
     // Wire the UI even if storage/sync init fails, so buttons are never dead.
     try {
