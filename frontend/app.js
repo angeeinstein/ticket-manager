@@ -119,7 +119,7 @@
     opts = opts || {};
     opts.headers = Object.assign({ "X-Scanner-Token": LS.token }, opts.headers || {});
     const res = await fetch(path, opts);
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    if (!res.ok) { const err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
     return res.json();
   }
 
@@ -136,41 +136,69 @@
     lastSlotEndCache = max;
   }
 
+  // We POLL (no websockets) with an adaptive interval: a steady cadence when healthy,
+  // exponential backoff while reconnecting. Polling is the robust choice for an offline-
+  // first app — each poll is cheap (the server replies {unchanged:true} when our
+  // data_version is current) and it recovers from any number of disconnects with no socket
+  // to keep alive. `conn` drives the on-screen status; `syncing` prevents overlap.
+  const SYNC_OK_MS = 10000;       // cadence when the last sync succeeded
+  const SYNC_BACKOFF_BASE = 2000; // first retry delay after a failure
+  const SYNC_BACKOFF_MAX = 30000; // backoff ceiling
+  const conn = { state: "init", failures: 0, lastOkAt: 0 };
+  let syncing = false;
+  let syncTimer = null;
+
+  function scheduleNextSync() {
+    clearTimeout(syncTimer);
+    let delay = SYNC_OK_MS;
+    if (conn.state !== "online") {
+      const n = Math.min(conn.failures, 5);
+      delay = Math.min(SYNC_BACKOFF_MAX, SYNC_BACKOFF_BASE * Math.pow(2, Math.max(0, n - 1)));
+    }
+    syncTimer = setTimeout(() => { syncNow(); }, delay);
+  }
+
   async function syncNow() {
-    if (!navigator.onLine) { setOnline(false); return; }
+    if (syncing) return;
+    syncing = true;
+    if (conn.state !== "online") setConn("syncing"); // avoid badge flicker on healthy polls
     try {
-      // 1) Push anything pending first so our changes aren't overwritten.
+      // 1) Push anything pending first so our local changes aren't overwritten.
       await flushQueue();
       await pushDelayIfDirty();
       await pushSettingsIfDirty();
 
-      // 2) Pull the snapshot.
+      // 2) Pull the snapshot (skips the body when our version is current).
       const data = await apiFetch("/api/sync?since=" + LS.version);
-      setOnline(true);
-      if (data.unchanged) { LS.lastSync = iso(nowDate()); renderStatus(); return; }
+      if (!data.unchanged) {
+        if (data.event_date) LS.eventDate = data.event_date;
+        await replaceTickets(data.tickets || []);
+        await putRedemptions(data.redemptions || []);
 
-      if (data.event_date) LS.eventDate = data.event_date;
-      await replaceTickets(data.tickets || []);
-      await putRedemptions(data.redemptions || []);
-
-      // Last-write-wins for delay: keep local if it is newer than the server's.
-      const serverDelay = data.delay || defaultDelay();
-      const local = LS.delay;
-      if (!LS.delayDirty && (serverDelay.updated_at || "") >= (local.updated_at || "")) {
-        LS.delay = serverDelay;
+        const serverDelay = data.delay || defaultDelay();
+        if (!LS.delayDirty && (serverDelay.updated_at || "") >= (LS.delay.updated_at || "")) {
+          LS.delay = serverDelay;
+        }
+        const serverSettings = data.settings || defaultSettings();
+        if (!LS.settingsDirty && (serverSettings.updated_at || "") >= (LS.settings.updated_at || "")) {
+          LS.settings = Object.assign(defaultSettings(), serverSettings);
+        }
+        LS.version = data.data_version || LS.version;
+        await recomputeLastSlotEnd();
+        renderAll();
       }
-      // Last-write-wins for settings (own timestamp group).
-      const serverSettings = data.settings || defaultSettings();
-      if (!LS.settingsDirty && (serverSettings.updated_at || "") >= (LS.settings.updated_at || "")) {
-        LS.settings = Object.assign(defaultSettings(), serverSettings);
-      }
-      LS.version = data.data_version || LS.version;
+      conn.failures = 0;
+      conn.lastOkAt = Date.now();
       LS.lastSync = iso(nowDate());
-      await recomputeLastSlotEnd();
-      renderAll();
+      setConn("online");
     } catch (e) {
-      setOnline(false);
+      conn.failures++;
+      setConn(e && e.status === 401 ? "auth" : "offline");
       console.warn("sync failed", e);
+    } finally {
+      syncing = false;
+      renderSyncMeta();
+      scheduleNextSync();
     }
   }
 
@@ -508,40 +536,32 @@
     $("override-row").style.display = showOverride ? "block" : "none";
   }
 
+  function setText(id, v) { const el = $(id); if (el) el.textContent = v; }
+
   async function renderStats() {
     const s = await computeStats();
-    $("offset-badge").textContent = s.offset > 0 ? "Slots +" + s.offset + " min" : "On schedule";
-    $("offset-badge").className = "badge " + (s.offset > 0 ? "badge-warn" : "badge-ok");
+    const ob = $("offset-badge");
+    if (ob) {
+      ob.textContent = s.offset > 0 ? "+" + s.offset + "m" : "on time";
+      ob.className = "badge " + (s.offset > 0 ? "badge-warn" : "badge-ok");
+    }
 
-    $("stat-slot-total").textContent = s.slotTotal;
-    $("stat-slot-scanned").textContent = s.slotScanned;
-    $("stat-slot-notyet").textContent = s.slotNotYet;
-    $("stat-slot-pct").textContent = s.slotPct + "%";
-    $("stat-slot-bar").style.width = s.slotPct + "%";
+    setText("stat-slot-scanned", s.slotScanned);
+    setText("stat-slot-total", s.slotTotal);
+    setText("stat-day-scanned", s.dayScanned);
+    setText("stat-day-total", s.dayTotal);
+    setText("stat-noshows", s.noShows);
 
-    $("stat-noshows").textContent = s.noShows;
-    $("stat-noshow-pct").textContent = s.noShowPct + "%";
-
-    $("stat-day-total").textContent = s.dayTotal;
-    $("stat-day-scanned").textContent = s.dayScanned;
-    $("stat-day-pct").textContent = s.dayPct + "%";
-
-    // Capacity card.
-    $("cap-window").textContent = s.capWindow;
-    if (s.capSet) {
-      $("stat-cap-used").textContent = s.capUsed;
-      $("stat-cap-max").textContent = s.cap;
-      $("stat-cap-pct").textContent = s.capPct + "%";
-      const bar = $("stat-cap-bar");
-      bar.style.width = Math.min(100, s.capPct) + "%";
-      const over = s.capUsed > s.cap;
+    setText("cap-window", s.capWindow);
+    setText("stat-cap-used", s.capUsed);
+    setText("stat-cap-max", s.capSet ? s.cap : "∞");
+    setText("stat-cap-pct", s.capSet ? s.capPct + "%" : "—");
+    const bar = $("stat-cap-bar");
+    if (bar) {
+      bar.style.width = (s.capSet ? Math.min(100, s.capPct) : 0) + "%";
+      const over = s.capSet && s.capUsed > s.cap;
       bar.classList.toggle("bar-over", over);
-      $("stat-cap-pct").classList.toggle("pct-over", over);
-    } else {
-      $("stat-cap-used").textContent = s.capUsed;
-      $("stat-cap-max").textContent = "∞";
-      $("stat-cap-pct").textContent = "—";
-      $("stat-cap-bar").style.width = "0%";
+      const pe = $("stat-cap-pct"); if (pe) pe.classList.toggle("pct-over", over);
     }
   }
 
@@ -627,17 +647,44 @@
       : "Base delay " + (LS.delay.delay_base_minutes || 0) + " min";
   }
 
-  function renderStatus() {
-    $("ticket-count").textContent = LS.version ? "v" + LS.version : "—";
-    $("last-sync").textContent = LS.lastSync ? new Date(LS.lastSync).toLocaleTimeString() : "never";
-    $("device-id").textContent = LS.deviceId;
-    $("token-input").value = LS.token;
+  function relTime(ts) {
+    if (!ts) return "never";
+    const s = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
+    if (s < 5) return "just now";
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    return Math.floor(s / 3600) + "h ago";
   }
 
-  function setOnline(on) {
+  function renderStatus() {
+    renderSyncMeta();
+    $("device-id").textContent = LS.deviceId;
+    const ti = $("token-input");
+    if (ti && document.activeElement !== ti) ti.value = LS.token; // don't clobber typing
+  }
+
+  // Lightweight: safe to call on a timer (no token-field writes).
+  function renderSyncMeta() {
+    const v = $("ticket-count"); if (v) v.textContent = LS.version ? "v" + LS.version : "—";
+    const ls = $("last-sync"); if (ls) ls.textContent = relTime(LS.lastSync);
+    renderConn();
+  }
+
+  function setConn(state) { conn.state = state; renderConn(); }
+
+  function renderConn() {
     const b = $("online-badge");
-    b.textContent = on ? "online" : "offline";
-    b.className = "badge " + (on ? "badge-ok" : "badge-warn");
+    if (!b) return;
+    let txt = "offline", cls = "badge-warn";
+    switch (conn.state) {
+      case "online":  txt = "● online"; cls = "badge-ok"; break;
+      case "syncing": txt = "⟳ syncing"; cls = "badge-sync"; break;
+      case "auth":    txt = "⚠ token?"; cls = "badge-bad"; break;
+      case "offline": txt = conn.failures > 1 ? "⟳ reconnecting" : "○ offline"; cls = "badge-warn"; break;
+      default:        txt = "…"; cls = "badge-sync";
+    }
+    b.textContent = txt;
+    b.className = "badge " + cls;
   }
 
   function renderAll() {
@@ -719,8 +766,11 @@
     $("btn-add-slot").onclick = addSlotManual;
     $("btn-clear-slots").onclick = clearSlots;
 
-    window.addEventListener("online", () => { setOnline(true); syncNow(); });
-    window.addEventListener("offline", () => setOnline(false));
+    // Network transitions: resync immediately on regain, reflect loss at once.
+    window.addEventListener("online", () => { conn.failures = 0; syncNow(); });
+    window.addEventListener("offline", () => setConn("offline"));
+    // Resync when the app is brought back to the foreground (phone unlocked / tab shown).
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
   }
 
   async function main() {
@@ -730,14 +780,14 @@
     await openDB();
     await recomputeLastSlotEnd();
     wire();
-    setOnline(navigator.onLine);
     renderAll();
-    await syncNow();
+    renderConn();
+    // First sync; it schedules every subsequent poll itself (adaptive backoff).
+    syncNow();
 
-    // Keep the live delay offset / stats ticking even without scans.
-    setInterval(() => { renderDelayButtons(); renderStats(); }, 10000);
-    // Periodic background sync when online.
-    setInterval(() => { if (navigator.onLine) syncNow(); }, 20000);
+    // UI tick: keep the live offset, stats and "last sync" label fresh without touching
+    // the network (the sync loop owns network cadence). No token-field writes here.
+    setInterval(() => { renderDelayButtons(); renderStats(); renderSyncMeta(); }, 3000);
   }
 
   document.addEventListener("DOMContentLoaded", main);

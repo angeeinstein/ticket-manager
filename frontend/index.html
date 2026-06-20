@@ -21,36 +21,17 @@
 
   <!-- ============================ SCAN TAB ============================ -->
   <section id="tab-scan" class="tab active">
-    <!-- Live statistics -->
-    <div class="stats">
-      <div class="stat-card big">
-        <div class="stat-label">Capacity this window <span id="cap-window" class="muted"></span></div>
-        <div class="stat-row">
-          <span><b id="stat-cap-used">0</b> / <span id="stat-cap-max">∞</span> riders</span>
-          <span class="pct" id="stat-cap-pct">—</span>
-        </div>
-        <div class="bar"><div id="stat-cap-bar" class="bar-fill" style="width:0%"></div></div>
-        <div class="stat-sub">rides down in the current real-time window</div>
+    <!-- Live statistics — compact single strip (keeps the scan screen scroll-free) -->
+    <div class="statbar">
+      <div class="statbar-top">
+        <span class="cap-main"><b id="stat-cap-used">0</b>/<span id="stat-cap-max">∞</span>
+          <span class="cap-lbl">cap</span> <span id="cap-window" class="cap-win"></span></span>
+        <span class="mini">slot <b id="stat-slot-scanned">0</b>/<span id="stat-slot-total">0</span></span>
+        <span class="mini">day <b id="stat-day-scanned">0</b>/<span id="stat-day-total">0</span></span>
+        <span class="mini">no-show <b id="stat-noshows">0</b></span>
+        <span class="pct" id="stat-cap-pct">—</span>
       </div>
-      <div class="stat-card big">
-        <div class="stat-label">Current slot scanned</div>
-        <div class="stat-row">
-          <span><b id="stat-slot-scanned">0</b> / <span id="stat-slot-total">0</span></span>
-          <span class="pct" id="stat-slot-pct">0%</span>
-        </div>
-        <div class="bar"><div id="stat-slot-bar" class="bar-fill" style="width:0%"></div></div>
-        <div class="stat-sub"><span id="stat-slot-notyet">0</span> not yet</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">No-shows</div>
-        <div class="stat-big" id="stat-noshows">0</div>
-        <div class="stat-sub"><span id="stat-noshow-pct">0%</span> of all</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Day total</div>
-        <div class="stat-big"><span id="stat-day-scanned">0</span>/<span id="stat-day-total">0</span></div>
-        <div class="stat-sub"><span id="stat-day-pct">0%</span> scanned</div>
-      </div>
+      <div class="bar thin"><div id="stat-cap-bar" class="bar-fill" style="width:0%"></div></div>
     </div>
 
     <!-- Walk-up mode indicator -->
