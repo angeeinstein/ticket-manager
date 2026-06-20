@@ -1,0 +1,496 @@
+/*
+ * Cable car ticket checker — PWA logic (the only operator interface).
+ *
+ * Everything works offline against an IndexedDB cache:
+ *   - scan a barcode -> validate on-device -> record a redemption
+ *   - control the live delay (start/stop/catch-up/reset)
+ *   - see live statistics for the current slot / no-shows / day totals
+ * The network is used only to sync the dataset, delay state, and redemptions.
+ */
+(function () {
+  "use strict";
+
+  // --------------------------------------------------------------- small helpers
+  const $ = (id) => document.getElementById(id);
+  const nowDate = () => new Date();
+  const iso = (d) => d.toISOString();
+  const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+  const LS = {
+    get token() { return localStorage.getItem("tc_token") || ""; },
+    set token(v) { localStorage.setItem("tc_token", v); },
+    get deviceId() {
+      let id = localStorage.getItem("tc_device_id");
+      if (!id) { id = "dev-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random()); localStorage.setItem("tc_device_id", id); }
+      return id;
+    },
+    get version() { return parseInt(localStorage.getItem("tc_data_version") || "0", 10); },
+    set version(v) { localStorage.setItem("tc_data_version", String(v)); },
+    get lastSync() { return localStorage.getItem("tc_last_sync") || ""; },
+    set lastSync(v) { localStorage.setItem("tc_last_sync", v); },
+    get delay() { try { return JSON.parse(localStorage.getItem("tc_delay") || "null") || defaultDelay(); } catch (e) { return defaultDelay(); } },
+    set delay(v) { localStorage.setItem("tc_delay", JSON.stringify(v)); },
+    get delayDirty() { return localStorage.getItem("tc_delay_dirty") === "1"; },
+    set delayDirty(v) { localStorage.setItem("tc_delay_dirty", v ? "1" : "0"); },
+    get queue() { try { return JSON.parse(localStorage.getItem("tc_redeem_queue") || "[]"); } catch (e) { return []; } },
+    set queue(v) { localStorage.setItem("tc_redeem_queue", JSON.stringify(v)); },
+  };
+
+  function defaultDelay() {
+    return {
+      delay_base_minutes: 0,
+      delay_running_since: null,
+      grace_before_minutes: 0,
+      grace_after_minutes: 0,
+      updated_at: new Date(0).toISOString(),
+      updated_by: "init",
+    };
+  }
+
+  // -------------------------------------------------------------------- IndexedDB
+  const DB_NAME = "ticketchecker";
+  const DB_VERSION = 1;
+  let _db = null;
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("tickets")) db.createObjectStore("tickets", { keyPath: "barcode" });
+        if (!db.objectStoreNames.contains("redemptions")) db.createObjectStore("redemptions", { keyPath: "key" });
+      };
+      req.onsuccess = () => { _db = req.result; resolve(_db); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function tx(store, mode) { return _db.transaction(store, mode).objectStore(store); }
+  function reqP(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+
+  async function replaceTickets(list) {
+    const store = _db.transaction("tickets", "readwrite").objectStore("tickets");
+    await reqP(store.clear());
+    for (const t of list) store.put(t);
+    return new Promise((res) => { store.transaction.oncomplete = () => res(); });
+  }
+  async function getTicket(barcode) { return reqP(tx("tickets", "readonly").get(barcode)); }
+  async function getAllTickets() { return reqP(tx("tickets", "readonly").getAll()); }
+  async function getAllRedemptions() { return reqP(tx("redemptions", "readonly").getAll()); }
+
+  function redemptionKey(r) { return r.barcode + "|" + r.device_id + "|" + r.scanned_at; }
+
+  async function putRedemptions(list) {
+    const store = _db.transaction("redemptions", "readwrite").objectStore("redemptions");
+    for (const r of list) { const rec = Object.assign({}, r); rec.key = redemptionKey(rec); store.put(rec); }
+    return new Promise((res) => { store.transaction.oncomplete = () => res(); });
+  }
+
+  // ----------------------------------------------------------------------- API
+  async function apiFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ "X-Scanner-Token": LS.token }, opts.headers || {});
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  // ---------------------------------------------------------------------- sync
+  let lastSlotEndCache = null; // Date — max ticket slot_end (offset applied at compute time)
+
+  async function recomputeLastSlotEnd() {
+    const tickets = await getAllTickets();
+    let max = null;
+    for (const t of tickets) {
+      const e = new Date(t.slot_end);
+      if (!max || e > max) max = e;
+    }
+    lastSlotEndCache = max;
+  }
+
+  async function syncNow() {
+    if (!navigator.onLine) { setOnline(false); return; }
+    try {
+      // 1) Push anything pending first so our changes aren't overwritten.
+      await flushQueue();
+      await pushDelayIfDirty();
+
+      // 2) Pull the snapshot.
+      const data = await apiFetch("/api/sync?since=" + LS.version);
+      setOnline(true);
+      if (data.unchanged) { LS.lastSync = iso(nowDate()); renderStatus(); return; }
+
+      await replaceTickets(data.tickets || []);
+      await putRedemptions(data.redemptions || []);
+
+      // Last-write-wins for delay: keep local if it is newer than the server's.
+      const serverDelay = data.delay || defaultDelay();
+      const local = LS.delay;
+      if (!LS.delayDirty && (serverDelay.updated_at || "") >= (local.updated_at || "")) {
+        LS.delay = serverDelay;
+      }
+      LS.version = data.data_version || LS.version;
+      LS.lastSync = iso(nowDate());
+      await recomputeLastSlotEnd();
+      renderAll();
+    } catch (e) {
+      setOnline(false);
+      console.warn("sync failed", e);
+    }
+  }
+
+  async function flushQueue() {
+    const q = LS.queue;
+    if (!q.length) return;
+    await apiFetch("/api/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ redemptions: q }),
+    });
+    LS.queue = [];
+  }
+
+  async function pushDelayIfDirty() {
+    if (!LS.delayDirty) return;
+    const d = LS.delay;
+    await apiFetch("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        delay_base_minutes: d.delay_base_minutes,
+        delay_running_since: d.delay_running_since,
+        grace_before_minutes: d.grace_before_minutes,
+        grace_after_minutes: d.grace_after_minutes,
+        updated_at: d.updated_at,
+        updated_by: d.updated_by,
+      }),
+    });
+    LS.delayDirty = false;
+  }
+
+  // ------------------------------------------------------------ delay controls
+  function touchDelay(mutator) {
+    const d = LS.delay;
+    mutator(d);
+    d.updated_at = iso(nowDate());
+    d.updated_by = LS.deviceId;
+    LS.delay = d;
+    LS.delayDirty = true;
+    renderAll();
+    pushDelayIfDirty().catch(() => {}); // best-effort; queued via dirty flag otherwise
+  }
+
+  function startDelay() {
+    touchDelay((d) => { if (!d.delay_running_since) d.delay_running_since = iso(nowDate()); });
+  }
+  function stopDelay() {
+    touchDelay((d) => {
+      if (d.delay_running_since) {
+        const elapsed = (nowDate().getTime() - new Date(d.delay_running_since).getTime()) / 60000;
+        d.delay_base_minutes = Math.max(0, Math.round((Number(d.delay_base_minutes) || 0) + elapsed));
+        d.delay_running_since = null;
+      }
+    });
+  }
+  function catchUp(mins) {
+    touchDelay((d) => {
+      // Fold any running delay into the base first so the number is concrete, then trim.
+      if (d.delay_running_since) {
+        const elapsed = (nowDate().getTime() - new Date(d.delay_running_since).getTime()) / 60000;
+        d.delay_base_minutes = Math.round((Number(d.delay_base_minutes) || 0) + elapsed);
+        d.delay_running_since = null;
+      }
+      d.delay_base_minutes = Math.max(0, (Number(d.delay_base_minutes) || 0) - mins);
+    });
+  }
+  function resetDelay() {
+    touchDelay((d) => { d.delay_base_minutes = 0; d.delay_running_since = null; });
+  }
+
+  // ------------------------------------------------------------------ scanning
+  let detector = null;
+  let stream = null;
+  let scanLoop = null;
+  let lastHandled = { value: null, at: 0 };
+
+  async function startCamera() {
+    if (stream) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      const video = $("video");
+      video.srcObject = stream;
+      await video.play();
+      $("btn-camera").textContent = "Stop camera";
+      if ("BarcodeDetector" in window) {
+        const formats = await window.BarcodeDetector.getSupportedFormats();
+        detector = new window.BarcodeDetector({ formats: formats });
+        scanLoop = setInterval(scanTick, 250);
+      } else {
+        showResult("info", "Camera scanning not supported", "Use manual entry below (BarcodeDetector unavailable on this browser).", null);
+      }
+    } catch (e) {
+      showResult("info", "Camera unavailable", String(e.message || e) + " — use manual entry.", null);
+    }
+  }
+
+  function stopCamera() {
+    if (scanLoop) { clearInterval(scanLoop); scanLoop = null; }
+    if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    detector = null;
+    $("btn-camera").textContent = "Start camera";
+  }
+
+  async function scanTick() {
+    if (!detector) return;
+    const video = $("video");
+    if (!video.videoWidth) return;
+    try {
+      const codes = await detector.detect(video);
+      if (codes && codes.length) handleScan(codes[0].rawValue);
+    } catch (e) { /* transient detect errors are expected */ }
+  }
+
+  let pendingOverride = null; // {barcode}
+
+  async function handleScan(rawValue) {
+    const value = (rawValue || "").trim();
+    if (!value) return;
+    const t = nowDate().getTime();
+    if (value === lastHandled.value && t - lastHandled.at < 2500) return; // debounce
+    lastHandled = { value: value, at: t };
+    if (navigator.vibrate) navigator.vibrate(40);
+
+    const ticket = await getTicket(value);
+    if (!ticket) {
+      pendingOverride = null;
+      showResult("blocked", "UNKNOWN TICKET", "No ticket with this barcode. " + value, null);
+      return;
+    }
+
+    const delay = LS.delay;
+    const res = Validity.computeValidity(
+      new Date(ticket.slot_start), new Date(ticket.slot_end),
+      lastSlotEndCache || new Date(ticket.slot_end), delay, nowDate()
+    );
+    const slotLabel = fmtSlot(ticket.slot_start, ticket.slot_end);
+
+    if (res.status === Validity.VALID) {
+      const already = await alreadyScanned(value);
+      if (already) {
+        showResult("warn", "ALREADY SCANNED", slotLabel + " · " + res.reason, ticket);
+      } else {
+        await recordRedemption(value, "valid", null);
+        showResult("valid", "VALID", slotLabel + " · " + res.reason, ticket);
+      }
+      pendingOverride = null;
+    } else {
+      // EARLY or BLOCKED — offer manual override.
+      pendingOverride = { barcode: value };
+      const head = res.status === Validity.EARLY ? "TOO EARLY" : "BLOCKED";
+      showResult("blocked", head, slotLabel + " · " + res.reason, ticket, true);
+    }
+    renderStats();
+  }
+
+  async function alreadyScanned(barcode) {
+    const all = await getAllRedemptions();
+    return all.some((r) => r.barcode === barcode && (r.result === "valid" || r.result === "override"));
+  }
+
+  async function recordRedemption(barcode, result, reason) {
+    const r = {
+      barcode: barcode,
+      scanned_at: iso(nowDate()),
+      device_id: LS.deviceId,
+      result: result,
+      override_reason: reason || null,
+    };
+    await putRedemptions([r]);
+    const q = LS.queue; q.push(r); LS.queue = q;
+    flushQueue().catch(() => {}); // best-effort; stays queued otherwise
+  }
+
+  async function doOverride() {
+    if (!pendingOverride) return;
+    const bc = pendingOverride.barcode;
+    pendingOverride = null;
+    if (await alreadyScanned(bc)) { showResult("warn", "ALREADY SCANNED", bc, null); return; }
+    await recordRedemption(bc, "override", "manual override");
+    showResult("valid", "OVERRIDDEN", "Allowed manually · " + bc, null);
+    renderStats();
+  }
+
+  // -------------------------------------------------------------------- stats
+  async function computeStats() {
+    const tickets = await getAllTickets();
+    const redemptions = await getAllRedemptions();
+    const delay = LS.delay;
+    const now = nowDate();
+    const offset = Validity.effectiveOffsetMinutes(delay, now);
+
+    const scanned = new Set();
+    for (const r of redemptions) if (r.result === "valid" || r.result === "override") scanned.add(r.barcode);
+
+    let slotTotal = 0, slotScanned = 0, noShows = 0;
+    for (const t of tickets) {
+      const start = Validity.addMinutes(new Date(t.slot_start), offset);
+      const end = Validity.addMinutes(new Date(t.slot_end), offset);
+      const isScanned = scanned.has(t.barcode);
+      if (now >= start && now < end) {
+        slotTotal++;
+        if (isScanned) slotScanned++;
+      }
+      if (now >= end && !isScanned) noShows++;
+    }
+    return {
+      offset: Math.round(offset),
+      slotTotal, slotScanned,
+      slotNotYet: slotTotal - slotScanned,
+      slotPct: pct(slotScanned, slotTotal),
+      noShows,
+      noShowPct: pct(noShows, tickets.length),
+      dayTotal: tickets.length,
+      dayScanned: scanned.size,
+      dayPct: pct(scanned.size, tickets.length),
+    };
+  }
+
+  // --------------------------------------------------------------- rendering
+  function fmtTime(isoStr) {
+    const d = new Date(isoStr);
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  function fmtSlot(s, e) { return fmtTime(s) + "–" + fmtTime(e); }
+
+  function showResult(kind, status, detail, ticket, showOverride) {
+    const panel = $("result");
+    panel.className = "result result-" + kind;
+    $("result-status").textContent = status;
+    $("result-detail").textContent = detail;
+    $("override-row").style.display = showOverride ? "block" : "none";
+  }
+
+  async function renderStats() {
+    const s = await computeStats();
+    $("offset-badge").textContent = s.offset > 0 ? "Slots +" + s.offset + " min" : "On schedule";
+    $("offset-badge").className = "badge " + (s.offset > 0 ? "badge-warn" : "badge-ok");
+
+    $("stat-slot-total").textContent = s.slotTotal;
+    $("stat-slot-scanned").textContent = s.slotScanned;
+    $("stat-slot-notyet").textContent = s.slotNotYet;
+    $("stat-slot-pct").textContent = s.slotPct + "%";
+    $("stat-slot-bar").style.width = s.slotPct + "%";
+
+    $("stat-noshows").textContent = s.noShows;
+    $("stat-noshow-pct").textContent = s.noShowPct + "%";
+
+    $("stat-day-total").textContent = s.dayTotal;
+    $("stat-day-scanned").textContent = s.dayScanned;
+    $("stat-day-pct").textContent = s.dayPct + "%";
+  }
+
+  function renderDelayButtons() {
+    const running = !!LS.delay.delay_running_since;
+    $("btn-start-delay").style.display = running ? "none" : "inline-block";
+    $("btn-stop-delay").style.display = running ? "inline-block" : "none";
+    $("delay-state").textContent = running
+      ? "Delay running since " + fmtTime(LS.delay.delay_running_since)
+      : "Base delay " + (LS.delay.delay_base_minutes || 0) + " min";
+  }
+
+  function renderStatus() {
+    $("ticket-count").textContent = LS.version ? "v" + LS.version : "—";
+    $("last-sync").textContent = LS.lastSync ? new Date(LS.lastSync).toLocaleTimeString() : "never";
+    $("device-id").textContent = LS.deviceId;
+    $("token-input").value = LS.token;
+  }
+
+  function setOnline(on) {
+    const b = $("online-badge");
+    b.textContent = on ? "online" : "offline";
+    b.className = "badge " + (on ? "badge-ok" : "badge-warn");
+  }
+
+  function renderAll() {
+    renderDelayButtons();
+    renderStatus();
+    renderStats();
+  }
+
+  // ----------------------------------------------------------------- uploads
+  async function uploadPdfs(files) {
+    const out = $("ingest-results");
+    if (!files || !files.length) return;
+    out.textContent = "Uploading " + files.length + " file(s)…";
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    try {
+      const data = await apiFetch("/api/ingest", { method: "POST", body: fd });
+      out.innerHTML = "<strong>" + data.ingested + "/" + data.total + " ingested</strong>";
+      const ul = document.createElement("ul");
+      for (const r of data.results) {
+        const li = document.createElement("li");
+        li.className = r.status === "ok" ? "ok" : "review";
+        li.textContent = r.status === "ok"
+          ? r.filename + " → " + r.barcode + " (" + fmtSlot(r.slot_start, r.slot_end) + ")"
+          : r.filename + " → needs review: " + (r.error || "");
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+      await syncNow();
+    } catch (e) {
+      out.textContent = "Upload failed (offline?). It will need connectivity: " + (e.message || e);
+    }
+  }
+
+  // -------------------------------------------------------------------- wiring
+  function showTab(name) {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.querySelectorAll(".tabbtn").forEach((b) => b.classList.remove("active"));
+    $("tab-" + name).classList.add("active");
+    $("tabbtn-" + name).classList.add("active");
+  }
+
+  function wire() {
+    $("tabbtn-scan").onclick = () => showTab("scan");
+    $("tabbtn-add").onclick = () => showTab("add");
+    $("tabbtn-settings").onclick = () => showTab("settings");
+
+    $("btn-camera").onclick = () => (stream ? stopCamera() : startCamera());
+    $("btn-manual").onclick = () => { handleScan($("manual-input").value); $("manual-input").value = ""; };
+    $("manual-input").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-manual").click(); });
+    $("btn-override").onclick = doOverride;
+
+    $("btn-start-delay").onclick = startDelay;
+    $("btn-stop-delay").onclick = stopDelay;
+    $("btn-catchup-1").onclick = () => catchUp(1);
+    $("btn-catchup-5").onclick = () => catchUp(5);
+    $("btn-reset-delay").onclick = resetDelay;
+
+    $("btn-upload").onclick = () => uploadPdfs($("pdf-input").files);
+    $("btn-sync").onclick = syncNow;
+    $("btn-save-token").onclick = () => { LS.token = $("token-input").value.trim(); syncNow(); };
+
+    window.addEventListener("online", () => { setOnline(true); syncNow(); });
+    window.addEventListener("offline", () => setOnline(false));
+  }
+
+  async function main() {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW reg failed", e));
+    }
+    await openDB();
+    await recomputeLastSlotEnd();
+    wire();
+    setOnline(navigator.onLine);
+    renderAll();
+    await syncNow();
+
+    // Keep the live delay offset / stats ticking even without scans.
+    setInterval(() => { renderDelayButtons(); renderStats(); }, 10000);
+    // Periodic background sync when online.
+    setInterval(() => { if (navigator.onLine) syncNow(); }, 20000);
+  }
+
+  document.addEventListener("DOMContentLoaded", main);
+})();

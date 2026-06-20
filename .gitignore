@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime data (never commit tickets / scans / secrets)
+data/
+inbox/
+.env
+
+# OS
+.DS_Store

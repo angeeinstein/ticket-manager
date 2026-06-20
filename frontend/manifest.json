@@ -1,0 +1,13 @@
+{
+  "name": "Cable Car Ticket Checker",
+  "short_name": "Ticket Checker",
+  "description": "Offline-first ticket scanner with time-slot validation and live delay control.",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0b5d8a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

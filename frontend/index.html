@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b5d8a" />
+  <title>Cable Car Ticket Checker</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="title">🚠 Ticket Checker</span>
+    <span class="badges">
+      <span id="offset-badge" class="badge badge-ok">On schedule</span>
+      <span id="online-badge" class="badge badge-warn">offline</span>
+    </span>
+  </header>
+
+  <!-- ============================ SCAN TAB ============================ -->
+  <section id="tab-scan" class="tab active">
+    <!-- Live statistics -->
+    <div class="stats">
+      <div class="stat-card big">
+        <div class="stat-label">Current slot scanned</div>
+        <div class="stat-row">
+          <span><b id="stat-slot-scanned">0</b> / <span id="stat-slot-total">0</span></span>
+          <span class="pct" id="stat-slot-pct">0%</span>
+        </div>
+        <div class="bar"><div id="stat-slot-bar" class="bar-fill" style="width:0%"></div></div>
+        <div class="stat-sub"><span id="stat-slot-notyet">0</span> not yet</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">No-shows</div>
+        <div class="stat-big" id="stat-noshows">0</div>
+        <div class="stat-sub"><span id="stat-noshow-pct">0%</span> of all</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Day total</div>
+        <div class="stat-big"><span id="stat-day-scanned">0</span>/<span id="stat-day-total">0</span></div>
+        <div class="stat-sub"><span id="stat-day-pct">0%</span> scanned</div>
+      </div>
+    </div>
+
+    <!-- Scan result -->
+    <div id="result" class="result result-idle">
+      <div id="result-status" class="result-status">Ready to scan</div>
+      <div id="result-detail" class="result-detail">Point the camera at a ticket barcode.</div>
+      <div id="override-row" class="override-row" style="display:none">
+        <button id="btn-override" class="btn btn-override">Allow anyway (override)</button>
+      </div>
+    </div>
+
+    <!-- Camera -->
+    <div class="camera-wrap">
+      <video id="video" playsinline muted></video>
+    </div>
+    <div class="row">
+      <button id="btn-camera" class="btn">Start camera</button>
+    </div>
+    <div class="row">
+      <input id="manual-input" class="input" inputmode="text" placeholder="Or type barcode…" />
+      <button id="btn-manual" class="btn">Check</button>
+    </div>
+
+    <!-- Delay controls -->
+    <div class="delay-panel">
+      <div class="delay-head">
+        <span>⏱ Delay</span>
+        <span id="delay-state" class="muted">Base delay 0 min</span>
+      </div>
+      <div class="row wrap">
+        <button id="btn-start-delay" class="btn btn-warn">Start delay</button>
+        <button id="btn-stop-delay" class="btn btn-ok" style="display:none">Stop delay</button>
+        <button id="btn-catchup-1" class="btn">Catch up −1</button>
+        <button id="btn-catchup-5" class="btn">Catch up −5</button>
+        <button id="btn-reset-delay" class="btn">Reset</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ ADD TAB ============================ -->
+  <section id="tab-add" class="tab">
+    <h2>Add tickets (upload PDFs)</h2>
+    <p class="muted">Select one or more ticket PDFs. They are parsed on the server and added
+      to the database. Needs connectivity.</p>
+    <input id="pdf-input" type="file" accept="application/pdf" multiple class="input" />
+    <div class="row"><button id="btn-upload" class="btn btn-ok">Upload &amp; ingest</button></div>
+    <div id="ingest-results" class="ingest-results"></div>
+  </section>
+
+  <!-- ========================== SETTINGS TAB ========================== -->
+  <section id="tab-settings" class="tab">
+    <h2>Settings &amp; sync</h2>
+    <label class="field">
+      <span>Scanner token</span>
+      <input id="token-input" class="input" type="password" placeholder="shared access token" />
+    </label>
+    <div class="row"><button id="btn-save-token" class="btn btn-ok">Save token &amp; sync</button></div>
+    <div class="row"><button id="btn-sync" class="btn">Sync now</button></div>
+    <ul class="kv">
+      <li><span>Data version</span><b id="ticket-count">—</b></li>
+      <li><span>Last sync</span><b id="last-sync">never</b></li>
+      <li><span>Device ID</span><b id="device-id" class="mono">—</b></li>
+    </ul>
+    <p class="muted">All scanning, delay control and statistics work offline from the local
+      cache. Sync pulls new tickets / delay state and flushes scans when online.</p>
+  </section>
+
+  <!-- ============================ TAB BAR ============================ -->
+  <nav class="tabbar">
+    <button id="tabbtn-scan" class="tabbtn active">Scan</button>
+    <button id="tabbtn-add" class="tabbtn">Add</button>
+    <button id="tabbtn-settings" class="tabbtn">Settings</button>
+  </nav>
+
+  <script src="validity.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

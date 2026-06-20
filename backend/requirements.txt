@@ -1,0 +1,10 @@
+# Backend dependencies for the cable car ticket checker (data layer only)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+python-dotenv==1.0.1
+PyMuPDF==1.25.2
+# Barcode-from-image decoding (used only when the barcode value is not in the PDF text).
+# pyzbar needs the system library `libzbar0` (installed by deploy/install.sh).
+pyzbar==0.1.9
+Pillow==11.1.0

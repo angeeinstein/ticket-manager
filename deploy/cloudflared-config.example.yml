@@ -1,0 +1,15 @@
+# Example config for a NAMED Cloudflare tunnel (alternative to the token connector).
+# Place at /etc/cloudflared/config.yml after `cloudflared tunnel login` and
+# `cloudflared tunnel create ticket-checker`. Then route DNS:
+#   cloudflared tunnel route dns ticket-checker tickets.example.com
+#
+# The token connector approach (cloudflared service install <TOKEN>) needs no file and is
+# what deploy/install.sh offers by default.
+
+tunnel: ticket-checker
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  - hostname: tickets.example.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404
