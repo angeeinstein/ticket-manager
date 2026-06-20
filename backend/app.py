@@ -28,6 +28,21 @@ app = FastAPI(title="Cable Car Ticket Checker", docs_url=None, redoc_url=None)
 _watcher: InboxWatcher | None = None
 
 
+@app.middleware("http")
+async def no_cache_shell(request, call_next):
+    """Never let the browser HTTP cache or an upstream CDN (Cloudflare) pin a stale PWA
+    shell or, critically, a stale service worker — that is what leaves a deployed update
+    unreachable on a phone. Offline support is provided by the service worker's own Cache
+    Storage, so disabling HTTP caching of these files is safe.
+    """
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ------------------------------------------------------------------- auth dependency
 
 def require_token(
