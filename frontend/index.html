@@ -7,7 +7,12 @@
   <title>Cable Car Ticket Checker</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" />
-  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <!-- iOS: allow "Add to Home Screen" to launch fullscreen like an app -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Ticket Checker" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -80,6 +85,12 @@
 
   <!-- ========================== SETTINGS TAB ========================== -->
   <section id="tab-settings" class="tab">
+    <div id="install-section" style="display:none">
+      <h2>Install app</h2>
+      <div class="row"><button id="btn-install" class="btn btn-ok" style="display:none">📲 Install to home screen</button></div>
+      <p id="install-hint" class="muted" style="display:none"></p>
+    </div>
+
     <h2>Event settings</h2>
     <p class="muted">These are shared: changes sync to the server and every phone (and apply
       offline immediately on this phone).</p>

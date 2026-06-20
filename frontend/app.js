@@ -745,6 +745,7 @@
     renderStatus();
     renderSettings();
     renderStats();
+    renderInstallUI();
   }
 
   // ----------------------------------------------------------------- uploads
@@ -807,6 +808,7 @@
 
     on("btn-upload", "click", () => uploadPdfs($("pdf-input").files));
     on("btn-sync", "click", () => syncNow());
+    on("btn-install", "click", doInstall);
     on("btn-reset-app", "click", () => {
       if (confirm("Reset the app? Clears the cached version and reloads the latest. Your token and settings stay.")) resetApp(true);
     });
@@ -833,6 +835,50 @@
     window.addEventListener("offline", () => setConn("offline"));
     // Resync when the app is brought back to the foreground (phone unlocked / tab shown).
     document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
+  }
+
+  // ---------------------------------------------------------------- install (PWA)
+  let deferredInstall = null;
+
+  function isStandalone() {
+    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  }
+
+  function initInstallPrompt() {
+    // Android Chrome fires this when the app is installable; stash it for our own button.
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredInstall = e;
+      renderInstallUI();
+    });
+    window.addEventListener("appinstalled", () => { deferredInstall = null; renderInstallUI(); });
+  }
+
+  function renderInstallUI() {
+    const sec = $("install-section");
+    if (!sec) return;
+    if (isStandalone()) { sec.style.display = "none"; return; } // already installed
+    sec.style.display = "block";
+    const btn = $("btn-install"), hint = $("install-hint");
+    if (deferredInstall) {
+      btn.style.display = "";
+      hint.style.display = "none";
+    } else {
+      btn.style.display = "none";
+      hint.style.display = "block";
+      const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      hint.textContent = iOS
+        ? "On iPhone/iPad: tap the Share button, then “Add to Home Screen”."
+        : "In the browser menu (⋮), choose “Install app” / “Add to Home screen”.";
+    }
+  }
+
+  async function doInstall() {
+    if (!deferredInstall) return;
+    deferredInstall.prompt();
+    try { await deferredInstall.userChoice; } catch (e) { /* dismissed */ }
+    deferredInstall = null;
+    renderInstallUI();
   }
 
   let _reloading = false;
@@ -870,6 +916,7 @@
     // Recovery entry point: visiting /?reset clears the service worker + caches and reloads.
     if (/[?&]reset\b/.test(location.search)) { await resetApp(true); return; }
 
+    initInstallPrompt();
     registerSW();
     // Wire the UI even if storage/sync init fails, so buttons are never dead.
     try {
