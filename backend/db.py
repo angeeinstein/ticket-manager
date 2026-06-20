@@ -27,7 +27,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def init_db(db_path: Path, event_date: str, grace_before: int, grace_after: int) -> None:
+def init_db(
+    db_path: Path,
+    event_date: str,
+    grace_before: int,
+    grace_after: int,
+    max_capacity_per_slot: int = 0,
+    slot_length_minutes: int = 15,
+    walkup_mode: bool = False,
+) -> None:
     """Open the connection and create the schema. Safe to call once at startup."""
     global _conn, _db_path
     _db_path = db_path
@@ -66,10 +74,20 @@ def init_db(db_path: Path, event_date: str, grace_before: int, grace_after: int)
         """
     )
     _conn.commit()
-    _seed_state(event_date, grace_before, grace_after)
+    _seed_state(
+        event_date, grace_before, grace_after,
+        max_capacity_per_slot, slot_length_minutes, walkup_mode,
+    )
 
 
-def _seed_state(event_date: str, grace_before: int, grace_after: int) -> None:
+def _seed_state(
+    event_date: str,
+    grace_before: int,
+    grace_after: int,
+    max_capacity_per_slot: int,
+    slot_length_minutes: int,
+    walkup_mode: bool,
+) -> None:
     defaults = {
         "data_version": "1",
         "event_date": event_date,
@@ -77,8 +95,14 @@ def _seed_state(event_date: str, grace_before: int, grace_after: int) -> None:
         "delay_running_since": "",  # empty = not running
         "delay_updated_at": _now_iso(),
         "delay_updated_by": "server",
+        # Settings group (own last-write-wins timestamp; see update_settings_state).
         "grace_before_minutes": str(grace_before),
         "grace_after_minutes": str(grace_after),
+        "max_capacity_per_slot": str(max_capacity_per_slot),
+        "slot_length_minutes": str(slot_length_minutes),
+        "walkup_mode": "1" if walkup_mode else "0",
+        "settings_updated_at": _now_iso(),
+        "settings_updated_by": "server",
     }
     assert _conn is not None
     cur = _conn.execute("SELECT key FROM app_state")
@@ -133,12 +157,10 @@ def get_data_version() -> int:
 def update_delay_state(
     delay_base_minutes: int,
     delay_running_since: str | None,
-    grace_before_minutes: int | None,
-    grace_after_minutes: int | None,
     updated_at: str,
     updated_by: str,
 ) -> dict:
-    """Apply a delay/grace update from a phone using last-write-wins by `updated_at`.
+    """Apply a delay update from a phone using last-write-wins by `updated_at`.
 
     Returns the resulting state (whether or not this update won) plus data_version.
     """
@@ -154,10 +176,40 @@ def update_delay_state(
                 "delay_updated_at": updated_at,
                 "delay_updated_by": updated_by,
             }
-            if grace_before_minutes is not None:
-                updates["grace_before_minutes"] = str(max(0, int(grace_before_minutes)))
-            if grace_after_minutes is not None:
-                updates["grace_after_minutes"] = str(max(0, int(grace_after_minutes)))
+            _set_state_locked(updates)
+            _bump_version_locked()
+        conn.commit()
+        rows = conn.execute("SELECT key, value FROM app_state").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def update_settings_state(
+    grace_before_minutes: int,
+    grace_after_minutes: int,
+    max_capacity_per_slot: int,
+    slot_length_minutes: int,
+    walkup_mode: bool,
+    updated_at: str,
+    updated_by: str,
+) -> dict:
+    """Apply a settings update from a phone using last-write-wins by `settings_updated_at`.
+
+    Settings live in their own group with their own timestamp so that frequent delay
+    changes never clobber an operator's (rare) settings change and vice-versa.
+    """
+    conn = _conn_required()
+    with _lock:
+        current = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM app_state").fetchall()}
+        if updated_at >= current.get("settings_updated_at", ""):
+            updates = {
+                "grace_before_minutes": str(max(0, int(grace_before_minutes))),
+                "grace_after_minutes": str(max(0, int(grace_after_minutes))),
+                "max_capacity_per_slot": str(max(0, int(max_capacity_per_slot))),
+                "slot_length_minutes": str(max(1, int(slot_length_minutes))),
+                "walkup_mode": "1" if walkup_mode else "0",
+                "settings_updated_at": updated_at,
+                "settings_updated_by": updated_by,
+            }
             _set_state_locked(updates)
             _bump_version_locked()
         conn.commit()
@@ -260,10 +312,17 @@ def sync_snapshot() -> dict[str, Any]:
         "delay": {
             "delay_base_minutes": int(state.get("delay_base_minutes", "0")),
             "delay_running_since": state.get("delay_running_since") or None,
-            "grace_before_minutes": int(state.get("grace_before_minutes", "0")),
-            "grace_after_minutes": int(state.get("grace_after_minutes", "0")),
             "updated_at": state.get("delay_updated_at"),
             "updated_by": state.get("delay_updated_by"),
+        },
+        "settings": {
+            "grace_before_minutes": int(state.get("grace_before_minutes", "0")),
+            "grace_after_minutes": int(state.get("grace_after_minutes", "0")),
+            "max_capacity_per_slot": int(state.get("max_capacity_per_slot", "0")),
+            "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
+            "walkup_mode": state.get("walkup_mode", "0") == "1",
+            "updated_at": state.get("settings_updated_at"),
+            "updated_by": state.get("settings_updated_by"),
         },
         "tickets": get_tickets(),
         "redemptions": get_redemptions(),

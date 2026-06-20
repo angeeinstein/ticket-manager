@@ -47,6 +47,17 @@ body {
 .pct { color: var(--ok); font-weight: 700; }
 .bar { height: 8px; background: var(--card2); border-radius: 6px; overflow: hidden; margin: 4px 0; }
 .bar-fill { height: 100%; background: var(--ok); transition: width .3s; }
+.bar-fill.bar-over { background: var(--bad); }
+.pct.pct-over { color: var(--bad); }
+
+/* walk-up banner */
+.walkup-banner { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; font-size: .85rem;
+  background: #0b3a4a; border: 1px solid var(--accent); color: #bae6fd; }
+
+/* toggle field */
+.field.toggle { display: flex; align-items: flex-start; gap: 10px; }
+.field.toggle input { width: 22px; height: 22px; margin-top: 2px; flex: none; }
+.field.toggle span { margin-bottom: 0; color: var(--text); font-size: .92rem; }
 
 /* result */
 .result { margin: 12px 0; border-radius: 14px; padding: 18px; text-align: center; border: 2px solid var(--line); background: var(--card); }

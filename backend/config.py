@@ -62,9 +62,17 @@ class Settings:
     host: str = field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8080")))
 
-    # Default grace minutes seeded into app state on first run (operator can change later).
+    # Default settings seeded into app state on first run (operator changes them in the app,
+    # after which the synced values win — these are only the initial seed).
     grace_before_minutes: int = field(default_factory=lambda: int(os.getenv("GRACE_BEFORE_MINUTES", "0")))
     grace_after_minutes: int = field(default_factory=lambda: int(os.getenv("GRACE_AFTER_MINUTES", "0")))
+    # Max riders the cable car handles per window (0 = unlimited / not set).
+    max_capacity_per_slot: int = field(default_factory=lambda: int(os.getenv("MAX_CAPACITY_PER_SLOT", "0")))
+    # Length of a capacity/throughput window in minutes (also the ticket slot length).
+    slot_length_minutes: int = field(default_factory=lambda: int(os.getenv("SLOT_LENGTH_MINUTES", "15")))
+    # Walk-up mode: when on, scanning an unknown barcode records it (one-time use) instead
+    # of rejecting it — lets the event run with no imported ticket data.
+    walkup_mode: bool = field(default_factory=lambda: _get_bool("WALKUP_MODE", False))
 
     # How often (seconds) the watched-folder poller scans the inbox.
     watch_interval_seconds: int = field(default_factory=lambda: int(os.getenv("WATCH_INTERVAL_SECONDS", "10")))

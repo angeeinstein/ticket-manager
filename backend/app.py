@@ -54,6 +54,9 @@ def _startup() -> None:
         settings.event_date,
         settings.grace_before_minutes,
         settings.grace_after_minutes,
+        settings.max_capacity_per_slot,
+        settings.slot_length_minutes,
+        settings.walkup_mode,
     )
     if settings.watch_enabled:
         _watcher = InboxWatcher(
@@ -77,9 +80,17 @@ def _shutdown() -> None:
 class DelayUpdate(BaseModel):
     delay_base_minutes: int
     delay_running_since: Optional[str] = None  # ISO datetime or null
-    grace_before_minutes: Optional[int] = None
-    grace_after_minutes: Optional[int] = None
     updated_at: str  # ISO datetime — drives last-write-wins
+    updated_by: str  # device id
+
+
+class SettingsUpdate(BaseModel):
+    grace_before_minutes: int = 0
+    grace_after_minutes: int = 0
+    max_capacity_per_slot: int = 0   # 0 = unlimited / not set
+    slot_length_minutes: int = 15
+    walkup_mode: bool = False
+    updated_at: str  # ISO datetime — drives last-write-wins (own settings timestamp)
     updated_by: str  # device id
 
 
@@ -143,7 +154,8 @@ async def ingest(files: list[UploadFile] = File(...)) -> dict:
 
 @app.get("/api/config", dependencies=[Depends(require_token)])
 def get_config() -> dict:
-    return db.sync_snapshot()["delay"] | {"data_version": db.get_data_version()}
+    snap = db.sync_snapshot()
+    return {"delay": snap["delay"], "settings": snap["settings"], "data_version": snap["data_version"]}
 
 
 @app.put("/api/config", dependencies=[Depends(require_token)])
@@ -151,18 +163,37 @@ def put_config(update: DelayUpdate) -> dict:
     state = db.update_delay_state(
         delay_base_minutes=update.delay_base_minutes,
         delay_running_since=update.delay_running_since,
-        grace_before_minutes=update.grace_before_minutes,
-        grace_after_minutes=update.grace_after_minutes,
         updated_at=update.updated_at,
         updated_by=update.updated_by,
     )
     return {
         "delay_base_minutes": int(state.get("delay_base_minutes", "0")),
         "delay_running_since": state.get("delay_running_since") or None,
-        "grace_before_minutes": int(state.get("grace_before_minutes", "0")),
-        "grace_after_minutes": int(state.get("grace_after_minutes", "0")),
         "updated_at": state.get("delay_updated_at"),
         "updated_by": state.get("delay_updated_by"),
+        "data_version": int(state.get("data_version", "1")),
+    }
+
+
+@app.put("/api/settings", dependencies=[Depends(require_token)])
+def put_settings(update: SettingsUpdate) -> dict:
+    state = db.update_settings_state(
+        grace_before_minutes=update.grace_before_minutes,
+        grace_after_minutes=update.grace_after_minutes,
+        max_capacity_per_slot=update.max_capacity_per_slot,
+        slot_length_minutes=update.slot_length_minutes,
+        walkup_mode=update.walkup_mode,
+        updated_at=update.updated_at,
+        updated_by=update.updated_by,
+    )
+    return {
+        "grace_before_minutes": int(state.get("grace_before_minutes", "0")),
+        "grace_after_minutes": int(state.get("grace_after_minutes", "0")),
+        "max_capacity_per_slot": int(state.get("max_capacity_per_slot", "0")),
+        "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
+        "walkup_mode": state.get("walkup_mode", "0") == "1",
+        "updated_at": state.get("settings_updated_at"),
+        "updated_by": state.get("settings_updated_by"),
         "data_version": int(state.get("data_version", "1")),
     }
 

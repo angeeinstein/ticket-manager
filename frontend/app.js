@@ -32,6 +32,10 @@
     set delay(v) { localStorage.setItem("tc_delay", JSON.stringify(v)); },
     get delayDirty() { return localStorage.getItem("tc_delay_dirty") === "1"; },
     set delayDirty(v) { localStorage.setItem("tc_delay_dirty", v ? "1" : "0"); },
+    get settings() { try { return Object.assign(defaultSettings(), JSON.parse(localStorage.getItem("tc_settings") || "null")); } catch (e) { return defaultSettings(); } },
+    set settings(v) { localStorage.setItem("tc_settings", JSON.stringify(v)); },
+    get settingsDirty() { return localStorage.getItem("tc_settings_dirty") === "1"; },
+    set settingsDirty(v) { localStorage.setItem("tc_settings_dirty", v ? "1" : "0"); },
     get queue() { try { return JSON.parse(localStorage.getItem("tc_redeem_queue") || "[]"); } catch (e) { return []; } },
     set queue(v) { localStorage.setItem("tc_redeem_queue", JSON.stringify(v)); },
   };
@@ -40,10 +44,31 @@
     return {
       delay_base_minutes: 0,
       delay_running_since: null,
-      grace_before_minutes: 0,
-      grace_after_minutes: 0,
       updated_at: new Date(0).toISOString(),
       updated_by: "init",
+    };
+  }
+
+  function defaultSettings() {
+    return {
+      grace_before_minutes: 0,
+      grace_after_minutes: 0,
+      max_capacity_per_slot: 0, // 0 = unlimited / not set
+      slot_length_minutes: 15,
+      walkup_mode: false,
+      updated_at: new Date(0).toISOString(),
+      updated_by: "init",
+    };
+  }
+
+  // Validity needs the grace window; build the dict it expects from delay + settings.
+  function delayForValidity() {
+    const d = LS.delay, s = LS.settings;
+    return {
+      delay_base_minutes: d.delay_base_minutes,
+      delay_running_since: d.delay_running_since,
+      grace_before_minutes: s.grace_before_minutes,
+      grace_after_minutes: s.grace_after_minutes,
     };
   }
 
@@ -114,6 +139,7 @@
       // 1) Push anything pending first so our changes aren't overwritten.
       await flushQueue();
       await pushDelayIfDirty();
+      await pushSettingsIfDirty();
 
       // 2) Pull the snapshot.
       const data = await apiFetch("/api/sync?since=" + LS.version);
@@ -128,6 +154,11 @@
       const local = LS.delay;
       if (!LS.delayDirty && (serverDelay.updated_at || "") >= (local.updated_at || "")) {
         LS.delay = serverDelay;
+      }
+      // Last-write-wins for settings (own timestamp group).
+      const serverSettings = data.settings || defaultSettings();
+      if (!LS.settingsDirty && (serverSettings.updated_at || "") >= (LS.settings.updated_at || "")) {
+        LS.settings = Object.assign(defaultSettings(), serverSettings);
       }
       LS.version = data.data_version || LS.version;
       LS.lastSync = iso(nowDate());
@@ -159,13 +190,41 @@
       body: JSON.stringify({
         delay_base_minutes: d.delay_base_minutes,
         delay_running_since: d.delay_running_since,
-        grace_before_minutes: d.grace_before_minutes,
-        grace_after_minutes: d.grace_after_minutes,
         updated_at: d.updated_at,
         updated_by: d.updated_by,
       }),
     });
     LS.delayDirty = false;
+  }
+
+  async function pushSettingsIfDirty() {
+    if (!LS.settingsDirty) return;
+    const s = LS.settings;
+    await apiFetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grace_before_minutes: s.grace_before_minutes,
+        grace_after_minutes: s.grace_after_minutes,
+        max_capacity_per_slot: s.max_capacity_per_slot,
+        slot_length_minutes: s.slot_length_minutes,
+        walkup_mode: s.walkup_mode,
+        updated_at: s.updated_at,
+        updated_by: s.updated_by,
+      }),
+    });
+    LS.settingsDirty = false;
+  }
+
+  function touchSettings(mutator) {
+    const s = LS.settings;
+    mutator(s);
+    s.updated_at = iso(nowDate());
+    s.updated_by = LS.deviceId;
+    LS.settings = s;
+    LS.settingsDirty = true;
+    renderAll();
+    pushSettingsIfDirty().catch(() => {}); // best-effort; queued via dirty flag otherwise
   }
 
   // ------------------------------------------------------------ delay controls
@@ -263,11 +322,23 @@
     const ticket = await getTicket(value);
     if (!ticket) {
       pendingOverride = null;
-      showResult("blocked", "UNKNOWN TICKET", "No ticket with this barcode. " + value, null);
+      // Walk-up mode: no imported data. Record the scan (one-time use) instead of rejecting,
+      // so the database is built from scans and capacity is still tracked.
+      if (LS.settings.walkup_mode) {
+        if (await alreadyScanned(value)) {
+          showResult("warn", "ALREADY SCANNED", "Walk-up ticket already used · " + value, null);
+        } else {
+          await recordRedemption(value, "valid", null);
+          showResult("valid", "RECORDED", "New walk-up ticket · " + value, null);
+        }
+      } else {
+        showResult("blocked", "UNKNOWN TICKET", "No ticket with this barcode. " + value, null);
+      }
+      renderStats();
       return;
     }
 
-    const delay = LS.delay;
+    const delay = delayForValidity();
     const res = Validity.computeValidity(
       new Date(ticket.slot_start), new Date(ticket.slot_end),
       lastSlotEndCache || new Date(ticket.slot_end), delay, nowDate()
@@ -321,16 +392,30 @@
   }
 
   // -------------------------------------------------------------------- stats
+  // Real wall-clock throughput window (NOT offset-adjusted): capacity is a physical limit
+  // of the cable car right now, so we bucket actual scans into fixed windows anchored at
+  // local midnight (e.g. 15-min -> :00/:15/:30/:45).
+  function throughputWindow(now, lenMin) {
+    const len = Math.max(1, lenMin || 15);
+    const minsOfDay = now.getHours() * 60 + now.getMinutes();
+    const startMin = Math.floor(minsOfDay / len) * len;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    start.setMinutes(startMin);
+    const end = new Date(start.getTime() + len * 60000);
+    return { start, end };
+  }
+
   async function computeStats() {
     const tickets = await getAllTickets();
     const redemptions = await getAllRedemptions();
-    const delay = LS.delay;
+    const settings = LS.settings;
     const now = nowDate();
-    const offset = Validity.effectiveOffsetMinutes(delay, now);
+    const offset = Validity.effectiveOffsetMinutes(LS.delay, now);
 
     const scanned = new Set();
     for (const r of redemptions) if (r.result === "valid" || r.result === "override") scanned.add(r.barcode);
 
+    // Assigned-slot attendance (only meaningful when tickets were imported).
     let slotTotal = 0, slotScanned = 0, noShows = 0;
     for (const t of tickets) {
       const start = Validity.addMinutes(new Date(t.slot_start), offset);
@@ -342,6 +427,17 @@
       }
       if (now >= end && !isScanned) noShows++;
     }
+
+    // Capacity / throughput in the current real-time window.
+    const cap = Number(settings.max_capacity_per_slot) || 0;
+    const win = throughputWindow(now, settings.slot_length_minutes);
+    let capUsed = 0;
+    for (const r of redemptions) {
+      if (r.result !== "valid" && r.result !== "override") continue;
+      const at = new Date(r.scanned_at);
+      if (at >= win.start && at < win.end) capUsed++;
+    }
+
     return {
       offset: Math.round(offset),
       slotTotal, slotScanned,
@@ -352,6 +448,11 @@
       dayTotal: tickets.length,
       dayScanned: scanned.size,
       dayPct: pct(scanned.size, tickets.length),
+      capSet: cap > 0,
+      cap: cap,
+      capUsed: capUsed,
+      capPct: cap > 0 ? Math.round((capUsed / cap) * 100) : 0,
+      capWindow: fmtSlot(win.start.toISOString(), win.end.toISOString()),
     };
   }
 
@@ -387,6 +488,35 @@
     $("stat-day-total").textContent = s.dayTotal;
     $("stat-day-scanned").textContent = s.dayScanned;
     $("stat-day-pct").textContent = s.dayPct + "%";
+
+    // Capacity card.
+    $("cap-window").textContent = s.capWindow;
+    if (s.capSet) {
+      $("stat-cap-used").textContent = s.capUsed;
+      $("stat-cap-max").textContent = s.cap;
+      $("stat-cap-pct").textContent = s.capPct + "%";
+      const bar = $("stat-cap-bar");
+      bar.style.width = Math.min(100, s.capPct) + "%";
+      const over = s.capUsed > s.cap;
+      bar.classList.toggle("bar-over", over);
+      $("stat-cap-pct").classList.toggle("pct-over", over);
+    } else {
+      $("stat-cap-used").textContent = s.capUsed;
+      $("stat-cap-max").textContent = "∞";
+      $("stat-cap-pct").textContent = "—";
+      $("stat-cap-bar").style.width = "0%";
+    }
+  }
+
+  function renderSettings() {
+    const s = LS.settings;
+    $("set-capacity").value = s.max_capacity_per_slot || 0;
+    $("set-slotlen").value = s.slot_length_minutes || 15;
+    $("set-walkup").checked = !!s.walkup_mode;
+    $("set-grace-before").value = s.grace_before_minutes || 0;
+    $("set-grace-after").value = s.grace_after_minutes || 0;
+    const wb = $("walkup-banner");
+    if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
   }
 
   function renderDelayButtons() {
@@ -414,6 +544,7 @@
   function renderAll() {
     renderDelayButtons();
     renderStatus();
+    renderSettings();
     renderStats();
   }
 
@@ -470,6 +601,19 @@
     $("btn-upload").onclick = () => uploadPdfs($("pdf-input").files);
     $("btn-sync").onclick = syncNow;
     $("btn-save-token").onclick = () => { LS.token = $("token-input").value.trim(); syncNow(); };
+
+    // Settings — each change updates the synced settings object (last-write-wins).
+    $("set-walkup").onchange = (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; });
+    const numEdit = (id, key, min) => {
+      $(id).onchange = (e) => {
+        const v = Math.max(min, parseInt(e.target.value || "0", 10) || 0);
+        touchSettings((s) => { s[key] = v; });
+      };
+    };
+    numEdit("set-capacity", "max_capacity_per_slot", 0);
+    numEdit("set-slotlen", "slot_length_minutes", 1);
+    numEdit("set-grace-before", "grace_before_minutes", 0);
+    numEdit("set-grace-after", "grace_after_minutes", 0);
 
     window.addEventListener("online", () => { setOnline(true); syncNow(); });
     window.addEventListener("offline", () => setOnline(false));

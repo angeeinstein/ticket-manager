@@ -24,6 +24,15 @@
     <!-- Live statistics -->
     <div class="stats">
       <div class="stat-card big">
+        <div class="stat-label">Capacity this window <span id="cap-window" class="muted"></span></div>
+        <div class="stat-row">
+          <span><b id="stat-cap-used">0</b> / <span id="stat-cap-max">∞</span> riders</span>
+          <span class="pct" id="stat-cap-pct">—</span>
+        </div>
+        <div class="bar"><div id="stat-cap-bar" class="bar-fill" style="width:0%"></div></div>
+        <div class="stat-sub">rides down in the current real-time window</div>
+      </div>
+      <div class="stat-card big">
         <div class="stat-label">Current slot scanned</div>
         <div class="stat-row">
           <span><b id="stat-slot-scanned">0</b> / <span id="stat-slot-total">0</span></span>
@@ -42,6 +51,11 @@
         <div class="stat-big"><span id="stat-day-scanned">0</span>/<span id="stat-day-total">0</span></div>
         <div class="stat-sub"><span id="stat-day-pct">0%</span> scanned</div>
       </div>
+    </div>
+
+    <!-- Walk-up mode indicator -->
+    <div id="walkup-banner" class="walkup-banner" style="display:none">
+      🎫 Walk-up mode — unknown tickets are recorded on first scan (one-time use)
     </div>
 
     <!-- Scan result -->
@@ -93,7 +107,35 @@
 
   <!-- ========================== SETTINGS TAB ========================== -->
   <section id="tab-settings" class="tab">
-    <h2>Settings &amp; sync</h2>
+    <h2>Event settings</h2>
+    <p class="muted">These are shared: changes sync to the server and every phone (and apply
+      offline immediately on this phone).</p>
+
+    <label class="field toggle">
+      <input id="set-walkup" type="checkbox" />
+      <span><b>Walk-up mode</b> — record unknown tickets on scan (no import needed). Enforces
+        one-time use; timeslot is not checked for walk-ups.</span>
+    </label>
+    <label class="field">
+      <span>Max capacity per window (riders, 0 = unlimited)</span>
+      <input id="set-capacity" class="input" type="number" inputmode="numeric" min="0" step="1" />
+    </label>
+    <label class="field">
+      <span>Window length (minutes)</span>
+      <input id="set-slotlen" class="input" type="number" inputmode="numeric" min="1" step="1" />
+    </label>
+    <div class="row">
+      <label class="field" style="flex:1">
+        <span>Grace before (min)</span>
+        <input id="set-grace-before" class="input" type="number" inputmode="numeric" min="0" step="1" />
+      </label>
+      <label class="field" style="flex:1">
+        <span>Grace after (min)</span>
+        <input id="set-grace-after" class="input" type="number" inputmode="numeric" min="0" step="1" />
+      </label>
+    </div>
+
+    <h2>Access &amp; sync</h2>
     <label class="field">
       <span>Scanner token</span>
       <input id="token-input" class="input" type="password" placeholder="shared access token" />
@@ -105,8 +147,8 @@
       <li><span>Last sync</span><b id="last-sync">never</b></li>
       <li><span>Device ID</span><b id="device-id" class="mono">—</b></li>
     </ul>
-    <p class="muted">All scanning, delay control and statistics work offline from the local
-      cache. Sync pulls new tickets / delay state and flushes scans when online.</p>
+    <p class="muted">All scanning, delay control, settings and statistics work offline from the
+      local cache. Sync pulls new tickets / delay / settings and flushes scans when online.</p>
   </section>
 
   <!-- ============================ TAB BAR ============================ -->
