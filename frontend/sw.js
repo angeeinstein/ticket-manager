@@ -1,11 +1,15 @@
 /*
- * Service worker — makes the PWA shell available offline.
+ * Service worker — offline support for the PWA shell.
  *
- * Shell assets are cached on install and served cache-first so the app launches with no
- * network. API calls (/api/*) are never cached; they go straight to the network and the
- * app falls back to its IndexedDB cache when offline.
+ * Strategy: NETWORK-FIRST for same-origin shell assets (HTML/JS/CSS). This guarantees a
+ * deploy is picked up immediately whenever the phone has connectivity, which avoids the
+ * classic "stale app.js against fresh index.html" breakage. When offline we fall back to
+ * the cached copy so the app still launches and runs from its IndexedDB data.
+ *
+ * API calls (/api/*) are never handled here — they go straight to the network and the app
+ * handles offline itself via IndexedDB.
  */
-const CACHE = "ticket-checker-v5";
+const CACHE = "ticket-checker-v6";
 const SHELL = [
   "./",
   "index.html",
@@ -30,25 +34,22 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
+  if (event.request.method !== "GET") return;            // POST/PUT etc. → network
+  if (url.pathname.startsWith("/api/")) return;          // API → network (offline via IDB)
+  if (url.origin !== self.location.origin) return;       // third-party → default
 
-  // Never cache API traffic — the app handles offline via IndexedDB itself.
-  if (url.pathname.startsWith("/api/")) {
-    return; // default network handling
-  }
-
-  // Cache-first for the shell; fall back to network and cache new GETs.
+  // Network-first: fetch fresh, update the cache, fall back to cache when offline.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((res) => {
-          if (event.request.method === "GET" && res.ok && url.origin === self.location.origin) {
-            const clone = res.clone();
-            caches.open(CACHE).then((c) => c.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => cached);
-    })
+    fetch(event.request)
+      .then((res) => {
+        if (res && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, clone));
+        }
+        return res;
+      })
+      .catch(() =>
+        caches.match(event.request).then((cached) => cached || caches.match("index.html"))
+      )
   );
 });

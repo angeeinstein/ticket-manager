@@ -763,42 +763,48 @@
     $("tabbtn-" + name).classList.add("active");
   }
 
+  // Attach a handler only if the element exists, so one missing/renamed element can never
+  // abort the rest of the wiring (which previously left every button dead).
+  function on(id, evt, fn) {
+    const el = $(id);
+    if (el) el.addEventListener(evt, fn);
+    else console.warn("wire: missing #" + id);
+  }
+
   function wire() {
-    $("tabbtn-scan").onclick = () => showTab("scan");
-    $("tabbtn-settings").onclick = () => showTab("settings");
+    on("tabbtn-scan", "click", () => showTab("scan"));
+    on("tabbtn-settings", "click", () => showTab("settings"));
 
-    $("btn-camera").onclick = () => (stream ? stopCamera() : startCamera());
-    $("btn-manual").onclick = () => { handleScan($("manual-input").value); $("manual-input").value = ""; };
-    $("manual-input").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-manual").click(); });
-    $("btn-override").onclick = doOverride;
+    on("btn-camera", "click", () => (stream ? stopCamera() : startCamera()));
+    on("btn-manual", "click", () => { handleScan($("manual-input").value); $("manual-input").value = ""; });
+    on("manual-input", "keydown", (e) => { if (e.key === "Enter") $("btn-manual").click(); });
+    on("btn-override", "click", doOverride);
 
-    $("btn-start-delay").onclick = startDelay;
-    $("btn-stop-delay").onclick = stopDelay;
-    $("btn-catchup-1").onclick = () => catchUp(1);
-    $("btn-catchup-5").onclick = () => catchUp(5);
-    $("btn-reset-delay").onclick = resetDelay;
+    on("btn-start-delay", "click", startDelay);
+    on("btn-stop-delay", "click", stopDelay);
+    on("btn-catchup-1", "click", () => catchUp(1));
+    on("btn-catchup-5", "click", () => catchUp(5));
+    on("btn-reset-delay", "click", resetDelay);
 
-    $("btn-upload").onclick = () => uploadPdfs($("pdf-input").files);
-    $("btn-sync").onclick = syncNow;
-    $("btn-save-token").onclick = () => { LS.token = $("token-input").value.trim(); syncNow(); };
+    on("btn-upload", "click", () => uploadPdfs($("pdf-input").files));
+    on("btn-sync", "click", () => syncNow());
+    on("btn-save-token", "click", () => { LS.token = $("token-input").value.trim(); syncNow(); });
 
     // Settings — each change updates the synced settings object (last-write-wins).
-    $("set-walkup").onchange = (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; });
-    const numEdit = (id, key, min) => {
-      $(id).onchange = (e) => {
-        const v = Math.max(min, parseInt(e.target.value || "0", 10) || 0);
-        touchSettings((s) => { s[key] = v; });
-      };
-    };
+    on("set-walkup", "change", (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; }));
+    const numEdit = (id, key, min) => on(id, "change", (e) => {
+      const v = Math.max(min, parseInt(e.target.value || "0", 10) || 0);
+      touchSettings((s) => { s[key] = v; });
+    });
     numEdit("set-capacity", "max_capacity_per_slot", 0);
     numEdit("set-slotlen", "slot_length_minutes", 1);
     numEdit("set-grace-before", "grace_before_minutes", 0);
     numEdit("set-grace-after", "grace_after_minutes", 0);
 
     // Time-slot schedule.
-    $("btn-gen-slots").onclick = generateSlots;
-    $("btn-add-slot").onclick = addSlotManual;
-    $("btn-clear-slots").onclick = clearSlots;
+    on("btn-gen-slots", "click", generateSlots);
+    on("btn-add-slot", "click", addSlotManual);
+    on("btn-clear-slots", "click", clearSlots);
 
     // Network transitions: resync immediately on regain, reflect loss at once.
     window.addEventListener("online", () => { conn.failures = 0; syncNow(); });
@@ -807,12 +813,30 @@
     document.addEventListener("visibilitychange", () => { if (!document.hidden) syncNow(); });
   }
 
-  async function main() {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW reg failed", e));
+  let _reloading = false;
+  function registerSW() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW reg failed", e));
+    // If a new service worker takes control (after a deploy), reload once to pick up fresh
+    // assets. Guarded so the first-ever install (no prior controller) doesn't reload.
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (_reloading) return;
+        _reloading = true;
+        location.reload();
+      });
     }
-    await openDB();
-    await recomputeLastSlotEnd();
+  }
+
+  async function main() {
+    registerSW();
+    // Wire the UI even if storage/sync init fails, so buttons are never dead.
+    try {
+      await openDB();
+      await recomputeLastSlotEnd();
+    } catch (e) {
+      console.error("init (IndexedDB) failed", e);
+    }
     wire();
     renderAll();
     renderConn();
