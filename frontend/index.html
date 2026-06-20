@@ -19,6 +19,8 @@
     </span>
   </header>
 
+  <main class="content">
+
   <!-- ============================ SCAN TAB ============================ -->
   <section id="tab-scan" class="tab active">
     <!-- Live statistics — compact single strip (keeps the scan screen scroll-free) -->
@@ -66,11 +68,11 @@
         <span>⏱ Delay</span>
         <span id="delay-state" class="muted">Base delay 0 min</span>
       </div>
-      <div class="row wrap">
-        <button id="btn-start-delay" class="btn btn-warn">Start delay</button>
-        <button id="btn-stop-delay" class="btn btn-ok" style="display:none">Stop delay</button>
-        <button id="btn-catchup-1" class="btn">Catch up −1</button>
-        <button id="btn-catchup-5" class="btn">Catch up −5</button>
+      <div class="row">
+        <button id="btn-start-delay" class="btn btn-warn">Start</button>
+        <button id="btn-stop-delay" class="btn btn-ok" style="display:none">Stop</button>
+        <button id="btn-catchup-1" class="btn">−1 min</button>
+        <button id="btn-catchup-5" class="btn">−5 min</button>
         <button id="btn-reset-delay" class="btn">Reset</button>
       </div>
     </div>
@@ -136,8 +138,9 @@
 
     <h2>Access &amp; sync</h2>
     <label class="field">
-      <span>Scanner token</span>
-      <input id="token-input" class="input" type="password" placeholder="shared access token" />
+      <span>Scanner token <span id="token-hint" class="muted"></span></span>
+      <input id="token-input" class="input" type="text" autocomplete="off" autocapitalize="off"
+        autocorrect="off" spellcheck="false" placeholder="paste the SCANNER_TOKEN from the server" />
     </label>
     <div class="row"><button id="btn-save-token" class="btn btn-ok">Save token &amp; sync</button></div>
     <div class="row"><button id="btn-sync" class="btn">Sync now</button></div>
@@ -157,6 +160,8 @@
     <div class="row"><button id="btn-upload" class="btn btn-ok">Upload &amp; ingest</button></div>
     <div id="ingest-results" class="ingest-results"></div>
   </section>
+
+  </main>
 
   <!-- ============================ TAB BAR ============================ -->
   <nav class="tabbar">

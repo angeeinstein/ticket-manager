@@ -716,11 +716,20 @@
     if (ti && document.activeElement !== ti) ti.value = LS.token; // don't clobber typing
   }
 
+  function renderTokenHint() {
+    const hint = $("token-hint");
+    if (!hint) return;
+    if (!LS.token) hint.textContent = "— required";
+    else if (conn.state === "auth") hint.textContent = "— rejected, check it";
+    else hint.textContent = "✓ saved";
+  }
+
   // Lightweight: safe to call on a timer (no token-field writes).
   function renderSyncMeta() {
     const v = $("ticket-count"); if (v) v.textContent = LS.version ? "v" + LS.version : "—";
     const ls = $("last-sync"); if (ls) ls.textContent = relTime(LS.lastSync);
     renderConn();
+    renderTokenHint();
   }
 
   function setConn(state) { conn.state = state; renderConn(); }
@@ -792,6 +801,7 @@
   function wire() {
     on("tabbtn-scan", "click", () => showTab("scan"));
     on("tabbtn-settings", "click", () => showTab("settings"));
+    on("online-badge", "click", () => showTab("settings")); // tap status → fix token/sync
 
     on("btn-camera", "click", () => (stream ? stopCamera() : startCamera()));
     on("btn-manual", "click", () => { handleScan($("manual-input").value); $("manual-input").value = ""; });
@@ -880,6 +890,8 @@
     wire();
     renderAll();
     renderConn();
+    // No token yet (e.g. fresh origin) → take the operator straight to Settings to enter it.
+    if (!LS.token) showTab("settings");
     // First sync; it schedules every subsequent poll itself (adaptive backoff).
     syncNow();
 
