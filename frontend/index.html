@@ -136,14 +136,9 @@
     <ul id="slot-list" class="slot-list"></ul>
     <div class="row"><button id="btn-clear-slots" class="btn">Clear all slots</button></div>
 
-    <h2>Access &amp; sync</h2>
-    <label class="field">
-      <span>Scanner token <span id="token-hint" class="muted"></span></span>
-      <input id="token-input" class="input" type="text" autocomplete="off" autocapitalize="off"
-        autocorrect="off" spellcheck="false" placeholder="paste the SCANNER_TOKEN from the server" />
-    </label>
-    <div class="row"><button id="btn-save-token" class="btn btn-ok">Save token &amp; sync</button></div>
-    <div class="row"><button id="btn-sync" class="btn">Sync now</button></div>
+    <h2>Sync</h2>
+    <p class="muted">Access is protected by Cloudflare Access — no in-app login needed.</p>
+    <div class="row"><button id="btn-sync" class="btn btn-ok">Sync now</button></div>
     <div class="row"><button id="btn-reset-app" class="btn">Reset app (reload latest version)</button></div>
     <ul class="kv">
       <li><span>Data version</span><b id="ticket-count">—</b></li>

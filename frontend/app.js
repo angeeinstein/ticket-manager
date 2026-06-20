@@ -17,8 +17,6 @@
   const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
   const LS = {
-    get token() { return localStorage.getItem("tc_token") || ""; },
-    set token(v) { localStorage.setItem("tc_token", v); },
     get deviceId() {
       let id = localStorage.getItem("tc_device_id");
       if (!id) { id = "dev-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random()); localStorage.setItem("tc_device_id", id); }
@@ -26,6 +24,7 @@
     },
     get version() { return parseInt(localStorage.getItem("tc_data_version") || "0", 10); },
     set version(v) { localStorage.setItem("tc_data_version", String(v)); },
+    // Auth is handled by Cloudflare Access in front of the app — no scanner token.
     get eventDate() { return localStorage.getItem("tc_event_date") || ""; },
     set eventDate(v) { localStorage.setItem("tc_event_date", v || ""); },
     get lastSync() { return localStorage.getItem("tc_last_sync") || ""; },
@@ -117,7 +116,7 @@
   // ----------------------------------------------------------------------- API
   async function apiFetch(path, opts) {
     opts = opts || {};
-    opts.headers = Object.assign({ "X-Scanner-Token": LS.token }, opts.headers || {});
+    opts.headers = opts.headers || {};
     const res = await fetch(path, opts);
     if (!res.ok) { const err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
     return res.json();
@@ -193,7 +192,7 @@
       setConn("online");
     } catch (e) {
       conn.failures++;
-      setConn(e && e.status === 401 ? "auth" : "offline");
+      setConn("offline");
       console.warn("sync failed", e);
     } finally {
       syncing = false;
@@ -711,25 +710,14 @@
 
   function renderStatus() {
     renderSyncMeta();
-    $("device-id").textContent = LS.deviceId;
-    const ti = $("token-input");
-    if (ti && document.activeElement !== ti) ti.value = LS.token; // don't clobber typing
+    const d = $("device-id"); if (d) d.textContent = LS.deviceId;
   }
 
-  function renderTokenHint() {
-    const hint = $("token-hint");
-    if (!hint) return;
-    if (!LS.token) hint.textContent = "— required";
-    else if (conn.state === "auth") hint.textContent = "— rejected, check it";
-    else hint.textContent = "✓ saved";
-  }
-
-  // Lightweight: safe to call on a timer (no token-field writes).
+  // Lightweight: safe to call on a timer.
   function renderSyncMeta() {
     const v = $("ticket-count"); if (v) v.textContent = LS.version ? "v" + LS.version : "—";
     const ls = $("last-sync"); if (ls) ls.textContent = relTime(LS.lastSync);
     renderConn();
-    renderTokenHint();
   }
 
   function setConn(state) { conn.state = state; renderConn(); }
@@ -741,7 +729,6 @@
     switch (conn.state) {
       case "online":  txt = "● online"; cls = "badge-ok"; break;
       case "syncing": txt = "⟳ syncing"; cls = "badge-sync"; break;
-      case "auth":    txt = "⚠ token?"; cls = "badge-bad"; break;
       case "offline": txt = conn.failures > 1 ? "⟳ reconnecting" : "○ offline"; cls = "badge-warn"; break;
       default:        txt = "…"; cls = "badge-sync";
     }
@@ -816,7 +803,6 @@
 
     on("btn-upload", "click", () => uploadPdfs($("pdf-input").files));
     on("btn-sync", "click", () => syncNow());
-    on("btn-save-token", "click", () => { LS.token = $("token-input").value.trim(); syncNow(); });
     on("btn-reset-app", "click", () => {
       if (confirm("Reset the app? Clears the cached version and reloads the latest. Your token and settings stay.")) resetApp(true);
     });
@@ -890,8 +876,6 @@
     wire();
     renderAll();
     renderConn();
-    // No token yet (e.g. fresh origin) → take the operator straight to Settings to enter it.
-    if (!LS.token) showTab("settings");
     // First sync; it schedules every subsequent poll itself (adaptive backoff).
     syncNow();
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Query, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -43,20 +43,8 @@ async def no_cache_shell(request, call_next):
     return response
 
 
-# ------------------------------------------------------------------- auth dependency
-
-def require_token(
-    x_scanner_token: Optional[str] = Header(default=None),
-    token: Optional[str] = Query(default=None),
-) -> None:
-    """Require the shared scanner token on /api/* calls (unless auth is disabled)."""
-    expected = settings.scanner_token
-    if not expected:
-        return  # auth disabled (not recommended on a public tunnel)
-    provided = x_scanner_token or token
-    if provided != expected:
-        raise HTTPException(status_code=401, detail="invalid or missing scanner token")
-
+# Access control is handled by Cloudflare Access in front of the app, so the API has no
+# in-app auth. (Keep the deployment behind Access / the tunnel — do not expose it directly.)
 
 # ------------------------------------------------------------------------ lifecycle
 
@@ -134,7 +122,7 @@ def health() -> dict:
     return {"ok": True, "tickets": db.count_tickets(), "data_version": db.get_data_version()}
 
 
-@app.get("/api/sync", dependencies=[Depends(require_token)])
+@app.get("/api/sync")
 def sync(since: int = Query(default=0)) -> JSONResponse:
     """Return the full snapshot. `since` lets the phone skip the body when unchanged."""
     version = db.get_data_version()
@@ -143,7 +131,7 @@ def sync(since: int = Query(default=0)) -> JSONResponse:
     return JSONResponse(db.sync_snapshot())
 
 
-@app.post("/api/ingest", dependencies=[Depends(require_token)])
+@app.post("/api/ingest")
 async def ingest(files: list[UploadFile] = File(...)) -> dict:
     """Parse uploaded PDFs and upsert tickets. Returns a per-file result for the phone."""
     results = []
@@ -173,13 +161,13 @@ async def ingest(files: list[UploadFile] = File(...)) -> dict:
     return {"ingested": ok, "total": len(results), "data_version": db.get_data_version(), "results": results}
 
 
-@app.get("/api/config", dependencies=[Depends(require_token)])
+@app.get("/api/config")
 def get_config() -> dict:
     snap = db.sync_snapshot()
     return {"delay": snap["delay"], "settings": snap["settings"], "data_version": snap["data_version"]}
 
 
-@app.put("/api/config", dependencies=[Depends(require_token)])
+@app.put("/api/config")
 def put_config(update: DelayUpdate) -> dict:
     state = db.update_delay_state(
         delay_base_minutes=update.delay_base_minutes,
@@ -196,7 +184,7 @@ def put_config(update: DelayUpdate) -> dict:
     }
 
 
-@app.put("/api/settings", dependencies=[Depends(require_token)])
+@app.put("/api/settings")
 def put_settings(update: SettingsUpdate) -> dict:
     state = db.update_settings_state(
         grace_before_minutes=update.grace_before_minutes,
@@ -211,12 +199,12 @@ def put_settings(update: SettingsUpdate) -> dict:
     return db.sync_snapshot()["settings"] | {"data_version": int(state.get("data_version", "1"))}
 
 
-@app.post("/api/redeem", dependencies=[Depends(require_token)])
+@app.post("/api/redeem")
 def redeem(batch: RedeemBatch) -> dict:
     added = db.add_redemptions([r.model_dump() for r in batch.redemptions])
     return {"added": added, "data_version": db.get_data_version()}
 
 
 # The PWA static files. Mounted LAST so /api/* routes take precedence. html=True serves
-# index.html at "/". The PWA shell is public; the API requires the scanner token.
+# index.html at "/". Cloudflare Access in front of the hostname gates everything.
 app.mount("/", StaticFiles(directory=str(settings.frontend_dir), html=True), name="frontend")

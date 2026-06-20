@@ -108,9 +108,8 @@ mkdir -p "$APP_DIR/data" "$APP_DIR/inbox/processed/needs_review"
 
 # ---------------------------------------------------------------- 4. .env config
 write_env() {
-  local token="$1" event_date="$2" port="$3" walkup="$4" capacity="$5" slotlen="$6"
-  sed -e "s|^SCANNER_TOKEN=.*|SCANNER_TOKEN=${token}|" \
-      -e "s|^EVENT_DATE=.*|EVENT_DATE=${event_date}|" \
+  local event_date="$1" port="$2" walkup="$3" capacity="$4" slotlen="$5"
+  sed -e "s|^EVENT_DATE=.*|EVENT_DATE=${event_date}|" \
       -e "s|^PORT=.*|PORT=${port}|" \
       -e "s|^WALKUP_MODE=.*|WALKUP_MODE=${walkup}|" \
       -e "s|^MAX_CAPACITY_PER_SLOT=.*|MAX_CAPACITY_PER_SLOT=${capacity}|" \
@@ -127,18 +126,8 @@ if [[ "$MODE" == "install" || $RECONFIGURE -eq 1 ]]; then
   def_walkup="$(cur WALKUP_MODE)";     def_walkup="${def_walkup:-false}"
   def_cap="$(cur MAX_CAPACITY_PER_SLOT)"; def_cap="${def_cap:-0}"
   def_slot="$(cur SLOT_LENGTH_MINUTES)";  def_slot="${def_slot:-15}"
-  def_token="$(cur SCANNER_TOKEN)"
 
   EVENT_DATE="$(ask "Event date (YYYY-MM-DD)" "$def_date")"
-
-  # Scanner token
-  if [[ -n "$def_token" && "$def_token" != changeme* ]] && yesno "Keep the existing scanner token?" "Y"; then
-    TOKEN="$def_token"
-  elif yesno "Auto-generate a strong scanner token?" "Y"; then
-    TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-  else
-    TOKEN="$(ask_secret "Enter the scanner token")"; [[ -n "$TOKEN" ]] || TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
-  fi
 
   if yesno "Start with WALK-UP mode ON (record unknown tickets, no import needed)?" \
            "$([[ "$def_walkup" == true ]] && echo Y || echo N)"; then WALKUP=true; else WALKUP=false; fi
@@ -146,9 +135,9 @@ if [[ "$MODE" == "install" || $RECONFIGURE -eq 1 ]]; then
   SLOTLEN="$(ask "Window / slot length in minutes" "$def_slot")"
   PORT="$(ask "Local port for the backend" "$def_port")"
 
-  write_env "$TOKEN" "$EVENT_DATE" "$PORT" "$WALKUP" "$CAPACITY" "$SLOTLEN"
+  write_env "$EVENT_DATE" "$PORT" "$WALKUP" "$CAPACITY" "$SLOTLEN"
   log "Wrote $APP_DIR/.env"
-  warn "Scanner token (enter this in the phone app → Settings):  ${TOKEN}"
+  warn "Protect the public hostname with Cloudflare Access — there is no in-app token."
 else
   log "Keeping existing $APP_DIR/.env (use --reconfigure to change it)"
   # Make sure any newly-added keys exist (merge missing lines from the example).
@@ -258,12 +247,13 @@ Health check:  curl -s http://127.0.0.1:${PORT_VAL}/api/health
 Service:       systemctl status ${SERVICE}    |    journalctl -u ${SERVICE} -f
 Config:        ${APP_DIR}/.env   (re-run with --reconfigure to change)
 
-Phone setup: open your public HTTPS hostname, go to Settings, paste the scanner token,
-tap "Save token & sync", then "Add to home screen". Configure the time slots there too.
+Phone setup: open your public HTTPS hostname (behind Cloudflare Access), then
+"Add to home screen". Configure capacity and time slots in Settings.
 
 To UPDATE later, just run the same one-command installer again:
   curl -fsSL https://raw.githubusercontent.com/angeeinstein/ticket-manager/main/deploy/bootstrap.sh | sudo bash
 
-RECOMMENDED: also put Cloudflare Access (Zero Trust) in front of the hostname.
+REQUIRED: put Cloudflare Access (Zero Trust) in front of the hostname — the app has no
+in-app auth, so Access (or at least keeping it off the public internet) is what protects it.
 EOF
 hr

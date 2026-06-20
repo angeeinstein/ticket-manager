@@ -55,9 +55,8 @@ class Settings:
     # The date the slots belong to (slots in the PDF are just HH:MM). Defaults to today.
     event_date: str = field(default_factory=lambda: os.getenv("EVENT_DATE", date.today().isoformat()))
 
-    # Shared secret required on /api/* calls. Empty string disables auth (NOT recommended
-    # for a public Cloudflare tunnel).
-    scanner_token: str = field(default_factory=lambda: os.getenv("SCANNER_TOKEN", ""))
+    # Access control is handled by Cloudflare Access in front of the app; there is no
+    # in-app token. Keep the service behind the tunnel / Access — do not expose it directly.
 
     host: str = field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8080")))

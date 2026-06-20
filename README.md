@@ -110,8 +110,8 @@ This bootstraps everything: it installs `git`/`curl`, clones the repo to
 `/opt/ticket-checker/src`, then runs the full installer, which:
 
 - installs system deps (incl. `libzbar0`), a Python venv, and the dependencies;
-- **interactively asks** for configuration (event date, scanner token — generated or your
-  own, walk-up mode, capacity, slot length, port);
+- **interactively asks** for configuration (event date, walk-up mode, capacity, slot
+  length, port);
 - installs and starts the `ticket-checker` **systemd** service (uvicorn on
   `127.0.0.1:<port>`) and health-checks it;
 - installs `cloudflared` and walks you through the **Cloudflare Tunnel** (token connector,
@@ -127,17 +127,19 @@ curl -fsSL .../deploy/bootstrap.sh | sudo BRANCH=main bash
 curl -fsSL .../deploy/bootstrap.sh | sudo bash -s -- --reconfigure
 ```
 
-Non-interactive: append `-s -- --yes` (accepts defaults, generates a token, skips the
-tunnel). Private repo: pass `GITHUB_TOKEN=...` before `bash`.
+Non-interactive: append `-s -- --yes` (accepts defaults, skips the tunnel). Private repo:
+pass `GITHUB_TOKEN=...` before `bash`.
 
 You can also run it from a manual checkout: `sudo bash deploy/install.sh`.
 
-**Recommended:** also put **Cloudflare Access** (Zero Trust) in front of the hostname.
+**Required:** the app has **no in-app login** — put **Cloudflare Access** (Zero Trust) in
+front of the hostname (or otherwise keep it off the public internet). That is what gates
+who can open the scanner.
 
 ## Using it
 
-1. On the Android phone, open `https://<your-hostname>/`, go to **Settings**, paste the
-   scanner token, tap **Save token & sync**, then **Add to home screen**.
+1. On the Android phone, open `https://<your-hostname>/` (you'll pass Cloudflare Access),
+   then **Add to home screen**. No token to enter.
 2. **Add tickets (optional):** on the **Add** tab, upload ticket PDFs (sales continue until
    slots start). You can also drop PDFs into `/opt/ticket-checker/inbox/` (e.g. via
    SFTP/Samba or an email-to-folder rule) — the watcher ingests them automatically. **No
