@@ -37,6 +37,9 @@ body {
 .badge-sync { background: var(--card2); color: var(--text); }
 .badge-bad { background: var(--bad); color: #fff; }
 
+/* full-screen scan flash (green/amber/red), fades out after each scan */
+.flash { position: fixed; inset: 0; z-index: 100; opacity: 0; pointer-events: none; }
+
 /* content area fills the space between top bar and tab bar */
 .content { flex: 1 1 auto; min-height: 0; }
 

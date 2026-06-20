@@ -24,6 +24,9 @@
     },
     get version() { return parseInt(localStorage.getItem("tc_data_version") || "0", 10); },
     set version(v) { localStorage.setItem("tc_data_version", String(v)); },
+    // Per-device (not synced): mute the scan beep on this phone.
+    get muted() { return localStorage.getItem("tc_muted") === "1"; },
+    set muted(v) { localStorage.setItem("tc_muted", v ? "1" : "0"); },
     // Auth is handled by Cloudflare Access in front of the app — no scanner token.
     get eventDate() { return localStorage.getItem("tc_event_date") || ""; },
     set eventDate(v) { localStorage.setItem("tc_event_date", v || ""); },
@@ -308,6 +311,7 @@
 
   async function startCamera() {
     if (stream) return;
+    initAudio(); // the tap that starts the camera is our chance to unlock Web Audio
     try {
       // Prefer the rear camera at a decent resolution — enough detail for small 1-D
       // barcodes without making each detect() call slow.
@@ -363,13 +367,56 @@
 
   let pendingOverride = null; // {barcode}
 
+  // ----------------------------------------------------------- scan feedback
+  // Audible beep (Web Audio, no files → works offline), a full-screen colour flash, and
+  // haptics — so every scan is unmistakable even when two greens happen back to back.
+  let audioCtx = null;
+  function initAudio() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    } catch (e) { /* audio not available */ }
+  }
+  function tone(freq, startDelay, dur, type, peak) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    const t0 = audioCtx.currentTime + startDelay;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak || 0.3, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  function beep(category) {
+    if (LS.muted || !audioCtx) return;
+    if (category === "ok") { tone(880, 0, 0.12, "sine", 0.32); tone(1245, 0.10, 0.16, "sine", 0.32); }
+    else if (category === "dup") { tone(620, 0, 0.12, "square", 0.22); tone(620, 0.17, 0.12, "square", 0.22); }
+    else { tone(200, 0, 0.34, "square", 0.28); } // bad / blocked / unknown
+  }
+  function flash(category) {
+    const el = $("flash"); if (!el) return;
+    const color = category === "ok" ? "#16a34a" : category === "dup" ? "#d97706" : "#dc2626";
+    el.style.transition = "none";
+    el.style.background = color;
+    el.style.opacity = "0.55";
+    requestAnimationFrame(() => { el.style.transition = "opacity 380ms ease-out"; el.style.opacity = "0"; });
+  }
+  // category: "ok" | "dup" | "bad"
+  function cue(category) {
+    beep(category);
+    flash(category);
+    if (navigator.vibrate) {
+      navigator.vibrate(category === "ok" ? 45 : category === "dup" ? [60, 50, 60] : [120, 60, 120]);
+    }
+  }
+
   async function handleScan(rawValue) {
     const value = (rawValue || "").trim();
     if (!value) return;
     const t = nowDate().getTime();
     if (value === lastHandled.value && t - lastHandled.at < 2500) return; // debounce
     lastHandled = { value: value, at: t };
-    if (navigator.vibrate) navigator.vibrate(40);
 
     const ticket = await getTicket(value);
     if (!ticket) {
@@ -379,12 +426,15 @@
       if (LS.settings.walkup_mode) {
         if (await alreadyScanned(value)) {
           showResult("warn", "ALREADY SCANNED", "Walk-up ticket already used · " + value, null);
+          cue("dup");
         } else {
           await recordRedemption(value, "valid", null);
           showResult("valid", "RECORDED", "New walk-up ticket · " + value, null);
+          cue("ok");
         }
       } else {
         showResult("blocked", "UNKNOWN TICKET", "No ticket with this barcode. " + value, null);
+        cue("bad");
       }
       renderStats();
       return;
@@ -401,9 +451,11 @@
       const already = await alreadyScanned(value);
       if (already) {
         showResult("warn", "ALREADY SCANNED", slotLabel + " · " + res.reason, ticket);
+        cue("dup");
       } else {
         await recordRedemption(value, "valid", null);
         showResult("valid", "VALID", slotLabel + " · " + res.reason, ticket);
+        cue("ok");
       }
       pendingOverride = null;
     } else {
@@ -411,6 +463,7 @@
       pendingOverride = { barcode: value };
       const head = res.status === Validity.EARLY ? "TOO EARLY" : "BLOCKED";
       showResult("blocked", head, slotLabel + " · " + res.reason, ticket, true);
+      cue("bad");
     }
     renderStats();
   }
@@ -437,9 +490,10 @@
     if (!pendingOverride) return;
     const bc = pendingOverride.barcode;
     pendingOverride = null;
-    if (await alreadyScanned(bc)) { showResult("warn", "ALREADY SCANNED", bc, null); return; }
+    if (await alreadyScanned(bc)) { showResult("warn", "ALREADY SCANNED", bc, null); cue("dup"); return; }
     await recordRedemption(bc, "override", "manual override");
     showResult("valid", "OVERRIDDEN", "Allowed manually · " + bc, null);
+    cue("ok");
     renderStats();
   }
 
@@ -627,6 +681,7 @@
     const wb = $("walkup-banner");
     if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
     const mr = $("manual-row"); if (mr) mr.style.display = s.manual_entry ? "flex" : "none";
+    const snd = $("set-sound"); if (snd) snd.checked = !LS.muted;
     renderSlots();
   }
 
@@ -809,6 +864,7 @@
     on("btn-upload", "click", () => uploadPdfs($("pdf-input").files));
     on("btn-sync", "click", () => syncNow());
     on("btn-install", "click", doInstall);
+    on("set-sound", "change", (e) => { LS.muted = !e.target.checked; if (e.target.checked) { initAudio(); beep("ok"); } });
     on("btn-reset-app", "click", () => {
       if (confirm("Reset the app? Clears the cached version and reloads the latest. Your token and settings stay.")) resetApp(true);
     });
