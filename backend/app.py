@@ -60,6 +60,7 @@ def _startup() -> None:
         settings.max_capacity_per_slot,
         settings.slot_length_minutes,
         settings.walkup_mode,
+        settings.manual_entry,
     )
     if settings.watch_enabled:
         _watcher = InboxWatcher(
@@ -98,6 +99,7 @@ class SettingsUpdate(BaseModel):
     max_capacity_per_slot: int = 0   # 0 = unlimited / not set
     slot_length_minutes: int = 15
     walkup_mode: bool = False
+    manual_entry: bool = False        # show the manual barcode-entry field on scan screen
     slots: list[Slot] = []           # the event time-slot schedule
     updated_at: str  # ISO datetime — drives last-write-wins (own settings timestamp)
     updated_by: str  # device id
@@ -192,6 +194,7 @@ def put_settings(update: SettingsUpdate) -> dict:
         max_capacity_per_slot=update.max_capacity_per_slot,
         slot_length_minutes=update.slot_length_minutes,
         walkup_mode=update.walkup_mode,
+        manual_entry=update.manual_entry,
         slots=[s.model_dump() for s in update.slots],
         updated_at=update.updated_at,
         updated_by=update.updated_by,

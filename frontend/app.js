@@ -57,6 +57,7 @@
       max_capacity_per_slot: 0, // 0 = unlimited / not set
       slot_length_minutes: 15,
       walkup_mode: false,
+      manual_entry: false, // show the manual barcode-entry field on the scan screen
       slots: [], // event schedule: [{start:"HH:MM", end:"HH:MM"}, ...]
       updated_at: new Date(0).toISOString(),
       updated_by: "init",
@@ -240,6 +241,7 @@
         max_capacity_per_slot: s.max_capacity_per_slot,
         slot_length_minutes: s.slot_length_minutes,
         walkup_mode: s.walkup_mode,
+        manual_entry: s.manual_entry,
         slots: s.slots || [],
         updated_at: s.updated_at,
         updated_by: s.updated_by,
@@ -619,10 +621,12 @@
     $("set-capacity").value = s.max_capacity_per_slot || 0;
     $("set-slotlen").value = s.slot_length_minutes || 15;
     $("set-walkup").checked = !!s.walkup_mode;
+    const sm = $("set-manual"); if (sm) sm.checked = !!s.manual_entry;
     $("set-grace-before").value = s.grace_before_minutes || 0;
     $("set-grace-after").value = s.grace_after_minutes || 0;
     const wb = $("walkup-banner");
     if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
+    const mr = $("manual-row"); if (mr) mr.style.display = s.manual_entry ? "flex" : "none";
     renderSlots();
   }
 
@@ -809,6 +813,7 @@
 
     // Settings — each change updates the synced settings object (last-write-wins).
     on("set-walkup", "change", (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; }));
+    on("set-manual", "change", (e) => touchSettings((s) => { s.manual_entry = e.target.checked; }));
     const numEdit = (id, key, min) => on(id, "change", (e) => {
       const v = Math.max(min, parseInt(e.target.value || "0", 10) || 0);
       touchSettings((s) => { s[key] = v; });

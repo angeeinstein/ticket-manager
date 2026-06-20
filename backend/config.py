@@ -72,6 +72,9 @@ class Settings:
     # Walk-up mode: when on, scanning an unknown barcode records it (one-time use) instead
     # of rejecting it — lets the event run with no imported ticket data.
     walkup_mode: bool = field(default_factory=lambda: _get_bool("WALKUP_MODE", False))
+    # Show the manual barcode-entry field on the scan screen (off by default; handy for
+    # damaged barcodes when scanning with real tickets). Toggle live from the phone.
+    manual_entry: bool = field(default_factory=lambda: _get_bool("MANUAL_ENTRY", False))
 
     # How often (seconds) the watched-folder poller scans the inbox.
     watch_interval_seconds: int = field(default_factory=lambda: int(os.getenv("WATCH_INTERVAL_SECONDS", "10")))

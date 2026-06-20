@@ -57,7 +57,7 @@
     <div class="row">
       <button id="btn-camera" class="btn">Start camera</button>
     </div>
-    <div class="row">
+    <div class="row" id="manual-row" style="display:none">
       <input id="manual-input" class="input" inputmode="text" placeholder="Or type barcode…" />
       <button id="btn-manual" class="btn">Check</button>
     </div>
@@ -88,6 +88,11 @@
       <input id="set-walkup" type="checkbox" />
       <span><b>Walk-up mode</b> — record unknown tickets on scan (no import needed). Enforces
         one-time use; timeslot is not checked for walk-ups.</span>
+    </label>
+    <label class="field toggle">
+      <input id="set-manual" type="checkbox" />
+      <span><b>Manual barcode entry</b> — show a type-it-in field on the scan screen, for
+        damaged barcodes that won't scan. Off by default.</span>
     </label>
     <label class="field">
       <span>Max capacity per window (riders, 0 = unlimited)</span>

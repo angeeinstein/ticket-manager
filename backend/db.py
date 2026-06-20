@@ -44,6 +44,7 @@ def init_db(
     max_capacity_per_slot: int = 0,
     slot_length_minutes: int = 15,
     walkup_mode: bool = False,
+    manual_entry: bool = False,
 ) -> None:
     """Open the connection and create the schema. Safe to call once at startup."""
     global _conn, _db_path
@@ -85,7 +86,7 @@ def init_db(
     _conn.commit()
     _seed_state(
         event_date, grace_before, grace_after,
-        max_capacity_per_slot, slot_length_minutes, walkup_mode,
+        max_capacity_per_slot, slot_length_minutes, walkup_mode, manual_entry,
     )
 
 
@@ -96,6 +97,7 @@ def _seed_state(
     max_capacity_per_slot: int,
     slot_length_minutes: int,
     walkup_mode: bool,
+    manual_entry: bool,
 ) -> None:
     defaults = {
         "data_version": "1",
@@ -110,6 +112,7 @@ def _seed_state(
         "max_capacity_per_slot": str(max_capacity_per_slot),
         "slot_length_minutes": str(slot_length_minutes),
         "walkup_mode": "1" if walkup_mode else "0",
+        "manual_entry": "1" if manual_entry else "0",
         "slots": "[]",  # JSON list of {"start":"HH:MM","end":"HH:MM"} — the event schedule
         "settings_updated_at": _now_iso(),
         "settings_updated_by": "server",
@@ -199,6 +202,7 @@ def update_settings_state(
     max_capacity_per_slot: int,
     slot_length_minutes: int,
     walkup_mode: bool,
+    manual_entry: bool,
     slots: list | None,
     updated_at: str,
     updated_by: str,
@@ -218,6 +222,7 @@ def update_settings_state(
                 "max_capacity_per_slot": str(max(0, int(max_capacity_per_slot))),
                 "slot_length_minutes": str(max(1, int(slot_length_minutes))),
                 "walkup_mode": "1" if walkup_mode else "0",
+                "manual_entry": "1" if manual_entry else "0",
                 "slots": json.dumps(slots if slots is not None else []),
                 "settings_updated_at": updated_at,
                 "settings_updated_by": updated_by,
@@ -333,6 +338,7 @@ def sync_snapshot() -> dict[str, Any]:
             "max_capacity_per_slot": int(state.get("max_capacity_per_slot", "0")),
             "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
             "walkup_mode": state.get("walkup_mode", "0") == "1",
+            "manual_entry": state.get("manual_entry", "0") == "1",
             "slots": _load_slots(state.get("slots", "[]")),
             "updated_at": state.get("settings_updated_at"),
             "updated_by": state.get("settings_updated_by"),
