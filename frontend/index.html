@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b5d8a" />
-  <title>Cable Car Ticket Checker</title>
+  <meta name="theme-color" content="#0b1220" />
+  <title>Ticket Checker</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" />
   <link rel="apple-touch-icon" href="icon-192.png" />
@@ -17,11 +17,13 @@
 </head>
 <body>
   <div id="flash" class="flash" aria-hidden="true"></div>
+
   <header class="topbar">
     <span class="title">🚠 Ticket Checker</span>
     <span class="badges">
-      <span id="offset-badge" class="badge badge-ok">On schedule</span>
-      <span id="online-badge" class="badge badge-warn">offline</span>
+      <span id="mode-chip" class="badge badge-soft" style="display:none">unknown ✓</span>
+      <span id="offset-badge" class="badge badge-ok">on time</span>
+      <span id="online-badge" class="badge badge-sync">…</span>
     </span>
   </header>
 
@@ -29,55 +31,53 @@
 
   <!-- ============================ SCAN TAB ============================ -->
   <section id="tab-scan" class="tab active">
-    <!-- Live statistics — compact single strip (keeps the scan screen scroll-free) -->
+    <!-- Live stats — slim chip strip -->
     <div class="statbar">
       <div class="statbar-top">
-        <span class="cap-main"><b id="stat-cap-used">0</b>/<span id="stat-cap-max">∞</span>
-          <span class="cap-lbl">cap</span> <span id="cap-window" class="cap-win"></span></span>
-        <span class="mini">slot <b id="stat-slot-scanned">0</b>/<span id="stat-slot-total">0</span></span>
-        <span class="mini">day <b id="stat-day-scanned">0</b>/<span id="stat-day-total">0</span></span>
+        <span class="stat-cap"><b id="stat-cap-used">0</b><span class="sep">/</span><span id="stat-cap-max">∞</span>
+          <span class="lbl">cap</span> <span id="cap-window" class="cap-win"></span>
+          <em class="pct" id="stat-cap-pct">—</em></span>
+        <span class="mini" id="slot-stat">slot <b id="stat-slot-scanned">0</b>/<span id="stat-slot-total">0</span></span>
+        <span class="mini">scanned <b id="stat-day-scanned">0</b><span id="day-total-wrap">/<span id="stat-day-total">0</span></span></span>
         <span class="mini">no-show <b id="stat-noshows">0</b></span>
-        <span class="pct" id="stat-cap-pct">—</span>
       </div>
       <div class="bar thin"><div id="stat-cap-bar" class="bar-fill" style="width:0%"></div></div>
     </div>
 
-    <!-- Walk-up mode indicator -->
-    <div id="walkup-banner" class="walkup-banner" style="display:none">
-      🎫 Walk-up mode — unknown tickets are recorded on first scan (one-time use)
-    </div>
-
-    <!-- Scan result -->
+    <!-- Scan result — the hero -->
     <div id="result" class="result result-idle">
-      <div id="result-status" class="result-status">Ready to scan</div>
+      <div id="result-icon" class="result-icon">⊚</div>
+      <div id="result-status" class="result-status">Ready</div>
       <div id="result-detail" class="result-detail">Point the camera at a ticket barcode.</div>
       <div id="override-row" class="override-row" style="display:none">
-        <button id="btn-override" class="btn btn-override">Allow anyway (override)</button>
+        <button id="btn-override" class="btn btn-warn">Allow anyway</button>
       </div>
     </div>
 
     <!-- Camera -->
     <div class="camera-wrap">
       <video id="video" playsinline muted></video>
+      <div class="reticle" aria-hidden="true"></div>
+      <button id="btn-torch" class="torch-btn" style="display:none" aria-label="Toggle light">🔦</button>
     </div>
+
     <div class="row">
-      <button id="btn-camera" class="btn">Start camera</button>
-      <button id="btn-torch" class="btn" style="display:none">🔦 Light</button>
+      <button id="btn-camera" class="btn btn-primary">Start camera</button>
     </div>
     <div class="row" id="manual-row" style="display:none">
-      <input id="manual-input" class="input" inputmode="text" placeholder="Or type barcode…" />
-      <button id="btn-manual" class="btn">Check</button>
+      <input id="manual-input" class="input" inputmode="text" placeholder="Type barcode…" />
+      <button id="btn-manual" class="btn btn-narrow">Check</button>
     </div>
 
     <!-- Delay controls -->
-    <div class="delay-panel">
-      <div class="delay-head">
+    <div class="card delay-card">
+      <div class="card-head">
         <span>⏱ Delay</span>
-        <span id="delay-state" class="muted">Base delay 0 min</span>
+        <span id="delay-state" class="muted">no delay</span>
       </div>
       <div class="row">
         <button id="btn-start-delay" class="btn btn-warn">Start</button>
-        <button id="btn-stop-delay" class="btn btn-ok" style="display:none">Stop</button>
+        <button id="btn-stop-delay" class="btn btn-primary" style="display:none">Stop</button>
         <button id="btn-catchup-1" class="btn">−1 min</button>
         <button id="btn-catchup-5" class="btn">−5 min</button>
         <button id="btn-reset-delay" class="btn">Reset</button>
@@ -87,114 +87,119 @@
 
   <!-- ========================== SETTINGS TAB ========================== -->
   <section id="tab-settings" class="tab">
-    <div id="install-section" style="display:none">
-      <h2>Install app</h2>
-      <div class="row"><button id="btn-install" class="btn btn-ok" style="display:none">📲 Install to home screen</button></div>
-      <p id="install-hint" class="muted" style="display:none"></p>
+    <div id="install-section" class="card" style="display:none">
+      <h3>Install</h3>
+      <button id="btn-install" class="btn btn-primary" style="display:none">📲 Install to home screen</button>
+      <p id="install-hint" class="hint" style="display:none"></p>
     </div>
 
-    <h2>Event settings</h2>
-    <p class="muted">These are shared: changes sync to the server and every phone (and apply
-      offline immediately on this phone).</p>
-
-    <label class="field toggle">
-      <input id="set-walkup" type="checkbox" />
-      <span><b>Walk-up mode</b> — record unknown tickets on scan (no import needed). Enforces
-        one-time use; timeslot is not checked for walk-ups.</span>
-    </label>
-    <label class="field toggle">
-      <input id="set-manual" type="checkbox" />
-      <span><b>Manual barcode entry</b> — show a type-it-in field on the scan screen, for
-        damaged barcodes that won't scan. Off by default.</span>
-    </label>
-    <label class="field toggle">
-      <input id="set-sound" type="checkbox" checked />
-      <span><b>Beep on scan</b> — sound + screen flash for each result (this phone only).</span>
-    </label>
-    <label class="field">
-      <span>Max capacity per window (riders, 0 = unlimited)</span>
-      <input id="set-capacity" class="input" type="number" inputmode="numeric" min="0" step="1" />
-    </label>
-    <label class="field">
-      <span>Window length (minutes)</span>
-      <input id="set-slotlen" class="input" type="number" inputmode="numeric" min="1" step="1" />
-    </label>
-    <div class="row">
-      <label class="field" style="flex:1">
-        <span>Grace before (min)</span>
-        <input id="set-grace-before" class="input" type="number" inputmode="numeric" min="0" step="1" />
+    <div class="card">
+      <h3>Scanning behaviour</h3>
+      <label class="switch">
+        <input id="set-walkup" type="checkbox" />
+        <span class="slider"></span>
+        <span class="switch-text"><b>Allow unknown tickets</b>
+          <small>Record &amp; count tickets that aren't in the imported list — each usable once.</small></span>
       </label>
-      <label class="field" style="flex:1">
-        <span>Grace after (min)</span>
-        <input id="set-grace-after" class="input" type="number" inputmode="numeric" min="0" step="1" />
+      <label class="switch">
+        <input id="set-manual" type="checkbox" />
+        <span class="slider"></span>
+        <span class="switch-text"><b>Manual entry</b>
+          <small>Show a type-it-in field for damaged barcodes.</small></span>
+      </label>
+      <label class="switch">
+        <input id="set-sound" type="checkbox" checked />
+        <span class="slider"></span>
+        <span class="switch-text"><b>Beep &amp; flash</b>
+          <small>Sound + screen flash on each scan (this phone).</small></span>
       </label>
     </div>
 
-    <h2>Scanning</h2>
-    <p class="muted">Restrict to your ticket's barcode type to avoid mis-reads. SKIDATA
-      tickets are usually <b>ITF</b> (Interleaved 2 of 5).</p>
-    <div id="format-list" class="format-list"></div>
-    <label class="field">
-      <span>Accept only values matching (regex; blank = accept any)</span>
-      <input id="set-pattern" class="input" type="text" inputmode="text" autocapitalize="off"
-        autocorrect="off" spellcheck="false" placeholder="^\d{20}$" />
-    </label>
-    <p id="supported-formats" class="muted"></p>
-
-    <h2>Time slots <span id="slot-count" class="muted"></span></h2>
-    <p class="muted">Define the event's slots — used for capacity stats and (in walk-up mode)
-      the current slot. Works with or without a server connection; offline changes apply
-      locally and sync later.</p>
-    <div class="row wrap">
-      <label class="field" style="flex:1"><span>First start</span>
-        <input id="gen-start" class="input" type="time" value="09:00" /></label>
-      <label class="field" style="flex:1"><span>Slot length (min)</span>
-        <input id="gen-len" class="input" type="number" inputmode="numeric" min="1" value="15" /></label>
+    <div class="card">
+      <h3>Capacity &amp; timing</h3>
+      <div class="row">
+        <label class="field"><span>Max riders / window</span>
+          <input id="set-capacity" class="input" type="number" inputmode="numeric" min="0" step="1" /></label>
+        <label class="field"><span>Window length (min)</span>
+          <input id="set-slotlen" class="input" type="number" inputmode="numeric" min="1" step="1" /></label>
+      </div>
+      <div class="row">
+        <label class="field"><span>Grace before (min)</span>
+          <input id="set-grace-before" class="input" type="number" inputmode="numeric" min="0" step="1" /></label>
+        <label class="field"><span>Grace after (min)</span>
+          <input id="set-grace-after" class="input" type="number" inputmode="numeric" min="0" step="1" /></label>
+      </div>
+      <p class="hint">0 capacity = unlimited. Grace widens each slot.</p>
     </div>
-    <div class="row wrap">
-      <label class="field" style="flex:1"><span>End by (optional)</span>
-        <input id="gen-end" class="input" type="time" /></label>
-      <label class="field" style="flex:1"><span>or # of slots</span>
-        <input id="gen-count" class="input" type="number" inputmode="numeric" min="1" /></label>
+
+    <div class="card">
+      <h3>Barcode types</h3>
+      <p class="hint">Restrict to your ticket's type to avoid mis-reads. SKIDATA = <b>ITF</b>.</p>
+      <div id="format-list" class="format-list"></div>
+      <label class="field"><span>Accept only values matching (regex, blank = any)</span>
+        <input id="set-pattern" class="input" type="text" inputmode="text" autocapitalize="off"
+          autocorrect="off" spellcheck="false" placeholder="^\d{20}$" /></label>
+      <p id="supported-formats" class="hint"></p>
     </div>
-    <div class="row"><button id="btn-gen-slots" class="btn btn-ok">Generate slots</button></div>
 
-    <div class="row wrap" style="align-items:flex-end">
-      <label class="field" style="flex:1"><span>Add slot — start</span>
-        <input id="add-slot-start" class="input" type="time" /></label>
-      <label class="field" style="flex:1"><span>end</span>
-        <input id="add-slot-end" class="input" type="time" /></label>
-      <button id="btn-add-slot" class="btn">Add</button>
+    <div class="card">
+      <h3>Time slots <span id="slot-count" class="muted"></span></h3>
+      <p class="hint">Used for capacity and the current-slot stats. Syncs to all phones.</p>
+      <div class="row">
+        <label class="field"><span>First start</span>
+          <input id="gen-start" class="input" type="time" value="09:00" /></label>
+        <label class="field"><span>Length (min)</span>
+          <input id="gen-len" class="input" type="number" inputmode="numeric" min="1" value="15" /></label>
+      </div>
+      <div class="row">
+        <label class="field"><span>End by (optional)</span>
+          <input id="gen-end" class="input" type="time" /></label>
+        <label class="field"><span>or # of slots</span>
+          <input id="gen-count" class="input" type="number" inputmode="numeric" min="1" /></label>
+      </div>
+      <button id="btn-gen-slots" class="btn btn-primary">Generate slots</button>
+
+      <div class="row" style="margin-top:14px">
+        <label class="field"><span>Add slot — start</span>
+          <input id="add-slot-start" class="input" type="time" /></label>
+        <label class="field"><span>end</span>
+          <input id="add-slot-end" class="input" type="time" /></label>
+      </div>
+      <button id="btn-add-slot" class="btn">Add slot</button>
+
+      <ul id="slot-list" class="slot-list"></ul>
+      <button id="btn-clear-slots" class="btn btn-danger-soft">Clear all slots</button>
     </div>
-    <ul id="slot-list" class="slot-list"></ul>
-    <div class="row"><button id="btn-clear-slots" class="btn">Clear all slots</button></div>
 
-    <h2>Sync</h2>
-    <p class="muted">Access is protected by Cloudflare Access — no in-app login needed.</p>
-    <div class="row"><button id="btn-sync" class="btn btn-ok">Sync now</button></div>
-    <div class="row"><button id="btn-reset-app" class="btn">Reset app (reload latest version)</button></div>
-    <ul class="kv">
-      <li><span>Data version</span><b id="ticket-count">—</b></li>
-      <li><span>Last sync</span><b id="last-sync">never</b></li>
-      <li><span>Device ID</span><b id="device-id" class="mono">—</b></li>
-    </ul>
-    <p class="muted">All scanning, delay control, settings and statistics work offline from the
-      local cache. Sync pulls new tickets / delay / settings and flushes scans when online.</p>
+    <div class="card">
+      <h3>Import tickets</h3>
+      <p class="hint">Optional — upload ticket PDFs to parse on the server (needs connectivity).</p>
+      <input id="pdf-input" type="file" accept="application/pdf" multiple class="input" />
+      <button id="btn-upload" class="btn btn-primary" style="margin-top:8px">Upload &amp; ingest</button>
+      <div id="ingest-results" class="ingest-results"></div>
+    </div>
 
-    <h2>Add tickets (upload PDFs)</h2>
-    <p class="muted">Optional — select one or more ticket PDFs to parse on the server. Needs
-      connectivity. With walk-up mode on you don't need this.</p>
-    <input id="pdf-input" type="file" accept="application/pdf" multiple class="input" />
-    <div class="row"><button id="btn-upload" class="btn btn-ok">Upload &amp; ingest</button></div>
-    <div id="ingest-results" class="ingest-results"></div>
+    <div class="card">
+      <h3>Sync &amp; device</h3>
+      <p class="hint">Protected by Cloudflare Access. Everything works offline and syncs when online.</p>
+      <div class="row">
+        <button id="btn-sync" class="btn btn-primary">Sync now</button>
+        <button id="btn-reset-app" class="btn btn-danger-soft">Reset app</button>
+      </div>
+      <ul class="kv">
+        <li><span>Data version</span><b id="ticket-count">—</b></li>
+        <li><span>Last sync</span><b id="last-sync">never</b></li>
+        <li><span>Device ID</span><b id="device-id" class="mono">—</b></li>
+      </ul>
+    </div>
   </section>
 
   </main>
 
   <!-- ============================ TAB BAR ============================ -->
   <nav class="tabbar">
-    <button id="tabbtn-scan" class="tabbtn active">Scan</button>
-    <button id="tabbtn-settings" class="tabbtn tabbtn-sm">⚙ Settings</button>
+    <button id="tabbtn-scan" class="tabbtn active">⊚ Scan</button>
+    <button id="tabbtn-settings" class="tabbtn">⚙ Settings</button>
   </nav>
 
   <script src="validity.js"></script>

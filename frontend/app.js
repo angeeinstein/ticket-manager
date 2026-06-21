@@ -695,9 +695,11 @@
   }
   function fmtSlot(s, e) { return fmtTime(s) + "–" + fmtTime(e); }
 
+  const RESULT_ICONS = { valid: "✓", blocked: "✕", warn: "⟳", info: "ⓘ", idle: "⊚" };
   function showResult(kind, status, detail, ticket, showOverride) {
     const panel = $("result");
     panel.className = "result result-" + kind;
+    const ic = $("result-icon"); if (ic) ic.textContent = RESULT_ICONS[kind] || "⊚";
     $("result-status").textContent = status;
     $("result-detail").textContent = detail;
     $("override-row").style.display = showOverride ? "block" : "none";
@@ -718,6 +720,11 @@
     setText("stat-day-scanned", s.dayScanned);
     setText("stat-day-total", s.dayTotal);
     setText("stat-noshows", s.noShows);
+
+    // With no imported tickets the "/0" denominators are noise — hide them.
+    const hasTickets = s.dayTotal > 0;
+    const slotStat = $("slot-stat"); if (slotStat) slotStat.style.display = hasTickets ? "" : "none";
+    const dtw = $("day-total-wrap"); if (dtw) dtw.style.display = hasTickets ? "" : "none";
 
     setText("cap-window", s.capWindow);
     setText("stat-cap-used", s.capUsed);
@@ -740,8 +747,7 @@
     const sm = $("set-manual"); if (sm) sm.checked = !!s.manual_entry;
     $("set-grace-before").value = s.grace_before_minutes || 0;
     $("set-grace-after").value = s.grace_after_minutes || 0;
-    const wb = $("walkup-banner");
-    if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
+    const chip = $("mode-chip"); if (chip) chip.style.display = s.walkup_mode ? "inline-block" : "none";
     const mr = $("manual-row"); if (mr) mr.style.display = s.manual_entry ? "flex" : "none";
     const snd = $("set-sound"); if (snd) snd.checked = !LS.muted;
     const pat = $("set-pattern"); if (pat && document.activeElement !== pat) pat.value = s.scan_pattern || "";
