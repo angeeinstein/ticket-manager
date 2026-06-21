@@ -123,7 +123,12 @@
   async function apiFetch(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
+    opts.redirect = "manual"; // makes a Cloudflare Access challenge detectable (opaqueredirect)
     const res = await fetch(path, opts);
+    // Expired/absent Access session → CF replies with a redirect (or 401/403) before the API.
+    if (res.type === "opaqueredirect" || res.status === 401 || res.status === 403) {
+      const err = new Error("auth required"); err.auth = true; throw err;
+    }
     if (!res.ok) { const err = new Error("HTTP " + res.status); err.status = res.status; throw err; }
     return res.json();
   }
@@ -198,7 +203,7 @@
       setConn("online");
     } catch (e) {
       conn.failures++;
-      setConn("offline");
+      setConn(e && e.auth ? "auth" : "offline");
       console.warn("sync failed", e);
     } finally {
       syncing = false;
@@ -980,11 +985,21 @@
     switch (conn.state) {
       case "online":  txt = "● online"; cls = "badge-ok"; break;
       case "syncing": txt = "⟳ syncing"; cls = "badge-sync"; break;
+      case "auth":    txt = "🔒 sign in"; cls = "badge-bad"; break;
       case "offline": txt = conn.failures > 1 ? "⟳ reconnecting" : "○ offline"; cls = "badge-warn"; break;
       default:        txt = "…"; cls = "badge-sync";
     }
     b.textContent = txt;
     b.className = "badge " + cls;
+    // Prominent banner only when the Cloudflare Access session needs renewing.
+    const ab = $("auth-banner"); if (ab) ab.style.display = conn.state === "auth" ? "block" : "none";
+  }
+
+  // Re-authenticate with Cloudflare Access: a top-level navigation the SW lets through, so
+  // the Access login can render; CF returns to this URL with a fresh cookie set.
+  function signIn() {
+    if (!navigator.onLine) { setConn("offline"); return; }
+    location.href = location.pathname + "?auth=" + Date.now();
   }
 
   function renderAll() {
@@ -1040,7 +1055,8 @@
   function wire() {
     on("tabbtn-scan", "click", () => showTab("scan"));
     on("tabbtn-settings", "click", () => showTab("settings"));
-    on("online-badge", "click", () => showTab("settings")); // tap status → fix token/sync
+    on("online-badge", "click", () => { if (conn.state === "auth") signIn(); else showTab("settings"); });
+    on("auth-banner", "click", signIn);
 
     on("btn-camera", "click", () => (stream ? stopCamera() : startCamera()));
     on("btn-torch", "click", toggleTorch);
@@ -1166,6 +1182,8 @@
   async function main() {
     // Recovery entry point: visiting /?reset clears the service worker + caches and reloads.
     if (/[?&]reset\b/.test(location.search)) { await resetApp(true); return; }
+    // Clean the ?auth marker left by a Cloudflare Access sign-in round-trip.
+    if (/[?&]auth=/.test(location.search)) { try { history.replaceState(null, "", location.pathname); } catch (e) { /* ignore */ } }
 
     initInstallPrompt();
     registerSW();

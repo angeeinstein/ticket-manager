@@ -43,6 +43,10 @@ body {
 .badge-bad { background: rgba(220,38,38,.2); color: #f87171; }
 .badge-soft { background: rgba(47,155,219,.18); color: #7dd3fc; }
 
+/* sign-in banner (only when the Cloudflare Access session needs renewing) */
+.auth-banner { flex: 0 0 auto; width: 100%; border: none; padding: 12px 14px; text-align: center;
+  background: var(--warn); color: #1b1206; font-weight: 700; font-size: .9rem; }
+
 /* content area fills between top bar and tab bar */
 .content { flex: 1 1 auto; min-height: 0; }
 

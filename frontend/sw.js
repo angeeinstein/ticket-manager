@@ -11,7 +11,7 @@
  * /api/* is never handled here — it goes straight to the network; the app handles offline
  * itself via IndexedDB.
  */
-const CACHE = "ticket-checker-v20";
+const CACHE = "ticket-checker-v21";
 const SHELL = [
   "./",
   "index.html",
@@ -61,6 +61,9 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;                 // POST/PUT etc. → network
   if (url.pathname.startsWith("/api/")) return;     // API → network (offline via IndexedDB)
   if (url.origin !== self.location.origin) return;  // third-party → default
+  // Sign-in navigations bypass the cache so the Cloudflare Access login can render
+  // (otherwise the cached shell would hide it and re-auth would be impossible).
+  if (url.searchParams.has("auth")) return;
 
   // Stale-while-revalidate: serve cache first (instant, offline-capable), refresh in bg.
   event.respondWith(
