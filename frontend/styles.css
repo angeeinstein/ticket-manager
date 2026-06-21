@@ -121,6 +121,9 @@ body {
 .card > .row:first-of-type, .card > .field:first-of-type,
 .card > .input:first-of-type, .hint + .row, .hint + .field { margin-top: 10px; }
 .row { display: flex; gap: 10px; margin-top: 10px; align-items: stretch; }
+/* Settings field pairs wrap instead of overlapping iOS's native time/number controls. */
+.card .row { flex-wrap: wrap; }
+.card .row > .field { flex: 1 1 140px; }
 .row.wrap { flex-wrap: wrap; }
 .btn {
   flex: 1 1 0; min-width: 0; min-height: 50px; padding: 12px 12px; border: none; border-radius: 12px;
@@ -188,6 +191,8 @@ body {
 
 /* --------------------------------------------------------------- flash */
 .flash { position: fixed; inset: 0; z-index: 100; opacity: 0; pointer-events: none; }
+.flash.flash-go { animation: flash-fade 420ms ease-out; }
+@keyframes flash-fade { from { opacity: .5; } to { opacity: 0; } }
 
 /* --------------------------------------------------------------- tab bar */
 .tabbar {

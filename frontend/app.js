@@ -442,6 +442,10 @@
   }
   function resetConfirm() { confirmValue = null; confirmCount = 0; confirmAt = 0; }
 
+  // 1-D symbologies without a mandatory check digit — prone to partial reads, so the
+  // configured pattern is enforced for these. Everything else has its own integrity check.
+  const PATTERN_GUARDED = { itf: 1, code_39: 1, codabar: 1 };
+
   function onDetect(raw, fmt) {
     const value = (raw || "").trim();
     if (!value) return;
@@ -449,7 +453,10 @@
     if (now - lastAcceptedAt < ACCEPT_COOLDOWN_MS) return;        // global cooldown
     const allow = LS.settings.scan_formats || [];
     if (allow.length && fmt && allow.indexOf(fmt) === -1) return; // wrong symbology
-    if (scanRegex && !scanRegex.test(value)) return;             // partial / junk read
+    // The pattern guards formats WITHOUT a built-in integrity check (ITF etc.). Checksummed
+    // symbologies (EAN/UPC/Code 128/QR/…) are trustworthy, so we don't reject those by the
+    // pattern — otherwise enabling e.g. EAN-13 wouldn't scan against a 20-digit ITF pattern.
+    if (scanRegex && (!fmt || PATTERN_GUARDED[fmt]) && !scanRegex.test(value)) return;
     // Confirmation: the SAME value must be read CONFIRM_FRAMES times in quick succession.
     // Transient mis-reads vary frame to frame, so they never reach the threshold.
     if (value === confirmValue && now - confirmAt < 900) confirmCount++;
@@ -536,11 +543,11 @@
   }
   function flash(category) {
     const el = $("flash"); if (!el) return;
-    const color = category === "ok" ? "#16a34a" : category === "dup" ? "#d97706" : "#dc2626";
-    el.style.transition = "none";
-    el.style.background = color;
-    el.style.opacity = "0.55";
-    requestAnimationFrame(() => { el.style.transition = "opacity 380ms ease-out"; el.style.opacity = "0"; });
+    el.style.background = category === "ok" ? "#16a34a" : category === "dup" ? "#d97706" : "#dc2626";
+    // Re-trigger the fade animation every scan (reflow forces a restart — reliable on iOS).
+    el.classList.remove("flash-go");
+    void el.offsetWidth;
+    el.classList.add("flash-go");
   }
   // category: "ok" | "dup" | "bad"
   function cue(category) {
