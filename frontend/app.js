@@ -313,7 +313,7 @@
   let scanning = false;
   let lastHandled = { value: null, at: 0 };
 
-  let zxingReader = null, usingZxing = false, _zxingPromise = null;
+  let zxingCore = null, zxingCanvas = null, _zxingPromise = null, lastZxingAt = 0;
 
   // ZXing (vendored, lazy-loaded) is the fallback for browsers without BarcodeDetector —
   // notably iOS Safari. Cached by the service worker, so it also works offline.
@@ -349,72 +349,82 @@
   }
 
   async function startCamera() {
-    if (stream || usingZxing) return;
+    if (stream) return;
     initAudio(); // the tap that starts the camera is our chance to unlock Web Audio
     compileScanRegex();
     resetConfirm();
     const video = $("video");
     video.setAttribute("playsinline", "");
     try {
+      // Use OUR camera pipeline on every platform (this is the part that already works
+      // everywhere — the feed shows). Only the *decoder* differs below.
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+
       const native = await nativeDetectorUsable();
       if (native.ok) {
-        // Native path. Rear camera at a decent resolution — enough detail for small 1-D
-        // barcodes without making each detect() call slow.
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
-        video.srcObject = stream;
-        await video.play();
         const want = (LS.settings.scan_formats || []).filter((f) => native.supported.indexOf(f) !== -1);
         detector = want.length ? new window.BarcodeDetector({ formats: want }) : new window.BarcodeDetector();
-        scanning = true;
-        requestAnimationFrame(scanFrame);
-        $("btn-camera").textContent = "Stop camera";
-        setupTorch();
       } else {
-        // Universal fallback for any browser without a working native detector.
-        await startZxing(video);
+        // Fallback for any browser without a working native detector (iOS Safari, Firefox…):
+        // decode frames ourselves with ZXing's core reader on a canvas snapshot.
+        await loadZxing();
+        zxingCore = new window.ZXing.MultiFormatReader();
+        zxingCore.setHints(zxingHints());
+        zxingCanvas = document.createElement("canvas");
       }
+      scanning = true;
+      requestAnimationFrame(scanFrame);
+      $("btn-camera").textContent = "Stop camera";
+      setupTorch();
     } catch (e) {
-      // Release any half-opened stream and try the ZXing fallback before giving up.
       if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; video.srcObject = null; }
-      if (!usingZxing) {
-        try { await startZxing(video); return; } catch (e2) { /* fall through to message */ }
-      }
-      usingZxing = false;
       showResult("info", "Camera unavailable", String(e.message || e) + " — try Manual entry in Settings.", null);
     }
   }
 
-  async function startZxing(video) {
-    showResult("info", "Starting scanner…", "Loading the barcode reader…", null);
-    await loadZxing();
+  function zxingHints() {
     const hints = new Map();
     const fmts = zxingFormats(LS.settings.scan_formats || []);
     if (fmts.length) hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
     hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
-    zxingReader = new window.ZXing.BrowserMultiFormatReader(hints);
-    usingZxing = true;
-    await zxingReader.decodeFromConstraints(
-      { video: { facingMode: { ideal: "environment" } }, audio: false },
-      video,
-      (result) => { if (result) onDetect(result.getText(), zxingNameOf(result.getBarcodeFormat())); }
-    );
-    stream = video.srcObject || null; // for torch / stop
-    $("btn-camera").textContent = "Stop camera";
-    setupTorch();
-    showResult("idle", "Ready", "Point the camera at a ticket barcode.", null);
+    return hints;
+  }
+
+  // Decode one video frame with ZXing core. Returns {text, format} or null.
+  function decodeZxingFrame(video) {
+    const Z = window.ZXing;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    const scale = Math.min(1, 900 / vw); // downscale wide frames a bit for speed
+    const c = zxingCanvas;
+    c.width = Math.round(vw * scale);
+    c.height = Math.round(vh * scale);
+    c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+    try {
+      const src = new Z.HTMLCanvasElementLuminanceSource(c);
+      const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(src));
+      const result = zxingCore.decode(bmp, zxingHints());
+      return { text: result.getText(), format: zxingNameOf(result.getBarcodeFormat()) };
+    } catch (e) {
+      return null; // NotFound etc. — normal between reads
+    } finally {
+      zxingCore.reset();
+    }
   }
 
   function stopCamera() {
     scanning = false;
     torchOn = false;
-    if (zxingReader) { try { zxingReader.reset(); } catch (e) { /* ignore */ } zxingReader = null; }
-    usingZxing = false;
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     const v = $("video"); if (v) v.srcObject = null;
     detector = null;
+    zxingCore = null;
+    zxingCanvas = null;
     $("btn-camera").textContent = "Start camera";
     const tb = $("btn-torch"); if (tb) tb.style.display = "none";
   }
@@ -452,14 +462,24 @@
   }
 
   // Continuous detect loop. Awaiting each detect() before scheduling the next frame avoids
-  // overlapping calls (which would slow detection), so it runs at the device's max rate.
+  // overlapping calls, so it runs at the device's max rate. Works with either decoder.
   async function scanFrame() {
-    if (!scanning || !detector) return;
+    if (!scanning) return;
     const video = $("video");
     if (video && video.readyState >= 2 && video.videoWidth) {
       try {
-        const codes = await detector.detect(video);
-        if (codes && codes.length) onDetect(codes[0].rawValue, codes[0].format);
+        if (detector) {
+          const codes = await detector.detect(video);
+          if (codes && codes.length) onDetect(codes[0].rawValue, codes[0].format);
+        } else if (zxingCore) {
+          // ZXing decode is heavier (runs on the JS thread) — throttle to ~10/s.
+          const t = Date.now();
+          if (t - lastZxingAt >= 100) {
+            lastZxingAt = t;
+            const r = decodeZxingFrame(video);
+            if (r) onDetect(r.text, r.format);
+          }
+        }
       } catch (e) { /* transient detect errors are expected */ }
     }
     if (scanning) requestAnimationFrame(scanFrame);
