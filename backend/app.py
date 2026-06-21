@@ -52,16 +52,16 @@ async def no_cache_shell(request, call_next):
 def _startup() -> None:
     global _watcher
     settings.ensure_dirs()
-    db.init_db(
-        settings.db_path,
-        settings.event_date,
-        settings.grace_before_minutes,
-        settings.grace_after_minutes,
-        settings.max_capacity_per_slot,
-        settings.slot_length_minutes,
-        settings.walkup_mode,
-        settings.manual_entry,
-    )
+    db.init_db(settings.db_path, settings.event_date, {
+        "grace_before_minutes": settings.grace_before_minutes,
+        "grace_after_minutes": settings.grace_after_minutes,
+        "max_capacity_per_slot": settings.max_capacity_per_slot,
+        "slot_length_minutes": settings.slot_length_minutes,
+        "walkup_mode": settings.walkup_mode,
+        "manual_entry": settings.manual_entry,
+        "scan_formats": settings.scan_formats,
+        "scan_pattern": settings.scan_pattern,
+    })
     if settings.watch_enabled:
         _watcher = InboxWatcher(
             inbox=settings.inbox_dir,
@@ -100,6 +100,8 @@ class SettingsUpdate(BaseModel):
     slot_length_minutes: int = 15
     walkup_mode: bool = False
     manual_entry: bool = False        # show the manual barcode-entry field on scan screen
+    scan_formats: list[str] = []      # allowed BarcodeDetector symbologies
+    scan_pattern: str = ""            # regex the decoded value must match (empty = any)
     slots: list[Slot] = []           # the event time-slot schedule
     updated_at: str  # ISO datetime — drives last-write-wins (own settings timestamp)
     updated_by: str  # device id
@@ -188,17 +190,8 @@ def put_config(update: DelayUpdate) -> dict:
 
 @app.put("/api/settings")
 def put_settings(update: SettingsUpdate) -> dict:
-    state = db.update_settings_state(
-        grace_before_minutes=update.grace_before_minutes,
-        grace_after_minutes=update.grace_after_minutes,
-        max_capacity_per_slot=update.max_capacity_per_slot,
-        slot_length_minutes=update.slot_length_minutes,
-        walkup_mode=update.walkup_mode,
-        manual_entry=update.manual_entry,
-        slots=[s.model_dump() for s in update.slots],
-        updated_at=update.updated_at,
-        updated_by=update.updated_by,
-    )
+    values = update.model_dump(exclude={"updated_at", "updated_by"})
+    state = db.update_settings_state(values, update.updated_at, update.updated_by)
     return db.sync_snapshot()["settings"] | {"data_version": int(state.get("data_version", "1"))}
 
 

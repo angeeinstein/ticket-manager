@@ -75,6 +75,13 @@ class Settings:
     # Show the manual barcode-entry field on the scan screen (off by default; handy for
     # damaged barcodes when scanning with real tickets). Toggle live from the phone.
     manual_entry: bool = field(default_factory=lambda: _get_bool("MANUAL_ENTRY", False))
+    # Allowed barcode symbologies (comma-separated BarcodeDetector format names) and a regex
+    # the decoded value must match. Defaults target SKIDATA numeric tickets (ITF, 20 digits)
+    # to stop partial/mis-reads. Editable live from the phone.
+    scan_formats: list = field(default_factory=lambda: [
+        f.strip() for f in os.getenv("SCAN_FORMATS", "itf,code_128").split(",") if f.strip()
+    ])
+    scan_pattern: str = field(default_factory=lambda: os.getenv("SCAN_PATTERN", r"^\d{20}$"))
 
     # How often (seconds) the watched-folder poller scans the inbox.
     watch_interval_seconds: int = field(default_factory=lambda: int(os.getenv("WATCH_INTERVAL_SECONDS", "10")))

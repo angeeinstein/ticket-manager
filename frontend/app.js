@@ -61,6 +61,8 @@
       slot_length_minutes: 15,
       walkup_mode: false,
       manual_entry: false, // show the manual barcode-entry field on the scan screen
+      scan_formats: ["itf", "code_128"], // allowed barcode symbologies (SKIDATA = ITF)
+      scan_pattern: "^\\d{20}$",         // decoded value must match this (kills partial reads)
       slots: [], // event schedule: [{start:"HH:MM", end:"HH:MM"}, ...]
       updated_at: new Date(0).toISOString(),
       updated_by: "init",
@@ -245,6 +247,8 @@
         slot_length_minutes: s.slot_length_minutes,
         walkup_mode: s.walkup_mode,
         manual_entry: s.manual_entry,
+        scan_formats: s.scan_formats || [],
+        scan_pattern: s.scan_pattern || "",
         slots: s.slots || [],
         updated_at: s.updated_at,
         updated_by: s.updated_by,
@@ -329,13 +333,17 @@
       await video.play();
       $("btn-camera").textContent = "Stop camera";
       if ("BarcodeDetector" in window) {
-        // Request every format the device supports (QR + the common 1-D symbologies:
-        // code_128, ean_13/8, upc_a/e, code_39, itf, codabar, …) so any ticket scans.
-        let formats;
-        try { formats = await window.BarcodeDetector.getSupportedFormats(); } catch (e) { formats = undefined; }
-        detector = formats && formats.length ? new window.BarcodeDetector({ formats: formats }) : new window.BarcodeDetector();
+        // Restrict to the configured symbologies (intersected with what the device can do),
+        // so unrelated barcode types are never decoded into spurious "tickets".
+        let supported = [];
+        try { supported = await window.BarcodeDetector.getSupportedFormats(); } catch (e) { supported = []; }
+        const want = (LS.settings.scan_formats || []).filter((f) => !supported.length || supported.indexOf(f) !== -1);
+        detector = want.length ? new window.BarcodeDetector({ formats: want }) : new window.BarcodeDetector();
+        compileScanRegex();
+        resetConfirm();
         scanning = true;
         requestAnimationFrame(scanFrame); // self-scheduling: scans as fast as the device allows
+        setupTorch();
       } else {
         showResult("info", "Camera scanning not supported", "Use manual entry below (BarcodeDetector unavailable on this browser).", null);
       }
@@ -346,9 +354,43 @@
 
   function stopCamera() {
     scanning = false;
+    torchOn = false;
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     detector = null;
     $("btn-camera").textContent = "Start camera";
+    const tb = $("btn-torch"); if (tb) tb.style.display = "none";
+  }
+
+  // ------- reliable acceptance: validate, confirm, then cool down (anti double-count) -------
+  const ACCEPT_COOLDOWN_MS = 1500; // after accepting any code, ignore everything briefly
+  const CONFIRM_FRAMES = 2;        // require N identical reads in a row before acting
+  let scanRegex = null;
+  let lastAcceptedAt = 0;
+  let confirmValue = null, confirmCount = 0, confirmAt = 0;
+
+  function compileScanRegex() {
+    const p = (LS.settings.scan_pattern || "").trim();
+    try { scanRegex = p ? new RegExp(p) : null; } catch (e) { scanRegex = null; }
+  }
+  function resetConfirm() { confirmValue = null; confirmCount = 0; confirmAt = 0; }
+
+  function onDetect(raw, fmt) {
+    const value = (raw || "").trim();
+    if (!value) return;
+    const now = Date.now();
+    if (now - lastAcceptedAt < ACCEPT_COOLDOWN_MS) return;        // global cooldown
+    const allow = LS.settings.scan_formats || [];
+    if (allow.length && fmt && allow.indexOf(fmt) === -1) return; // wrong symbology
+    if (scanRegex && !scanRegex.test(value)) return;             // partial / junk read
+    // Confirmation: the SAME value must be read CONFIRM_FRAMES times in quick succession.
+    // Transient mis-reads vary frame to frame, so they never reach the threshold.
+    if (value === confirmValue && now - confirmAt < 900) confirmCount++;
+    else { confirmValue = value; confirmCount = 1; }
+    confirmAt = now;
+    if (confirmCount < CONFIRM_FRAMES) return;
+    resetConfirm();
+    lastAcceptedAt = now;
+    handleScan(value);
   }
 
   // Continuous detect loop. Awaiting each detect() before scheduling the next frame avoids
@@ -359,10 +401,30 @@
     if (video && video.readyState >= 2 && video.videoWidth) {
       try {
         const codes = await detector.detect(video);
-        if (codes && codes.length) handleScan(codes[0].rawValue);
+        if (codes && codes.length) onDetect(codes[0].rawValue, codes[0].format);
       } catch (e) { /* transient detect errors are expected */ }
     }
     if (scanning) requestAnimationFrame(scanFrame);
+  }
+
+  // ------------------------------------------------------------------ torch
+  let torchOn = false;
+  function torchTrack() { return stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null; }
+  function torchSupported() {
+    const t = torchTrack();
+    return !!(t && t.getCapabilities && t.getCapabilities().torch);
+  }
+  function setupTorch() {
+    const tb = $("btn-torch");
+    if (!tb) return;
+    tb.style.display = torchSupported() ? "" : "none";
+    tb.textContent = "🔦 Light";
+  }
+  async function toggleTorch() {
+    const t = torchTrack();
+    if (!t) return;
+    try { torchOn = !torchOn; await t.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch (e) { /* unsupported */ }
+    const tb = $("btn-torch"); if (tb) tb.textContent = torchOn ? "🔦 Light on" : "🔦 Light";
   }
 
   let pendingOverride = null; // {barcode}
@@ -682,7 +744,46 @@
     if (wb) wb.style.display = s.walkup_mode ? "block" : "none";
     const mr = $("manual-row"); if (mr) mr.style.display = s.manual_entry ? "flex" : "none";
     const snd = $("set-sound"); if (snd) snd.checked = !LS.muted;
+    const pat = $("set-pattern"); if (pat && document.activeElement !== pat) pat.value = s.scan_pattern || "";
+    renderScanFormats(s.scan_formats || []);
+    compileScanRegex();
     renderSlots();
+  }
+
+  // ----------------------------------------------------- scanning settings UI
+  const FORMAT_OPTIONS = [
+    ["itf", "ITF (2 of 5)"], ["code_128", "Code 128"], ["code_39", "Code 39"],
+    ["qr_code", "QR"], ["ean_13", "EAN-13"], ["ean_8", "EAN-8"],
+    ["upc_a", "UPC-A"], ["pdf417", "PDF417"], ["data_matrix", "Data Matrix"], ["aztec", "Aztec"],
+  ];
+  function buildScanFormats() {
+    const box = $("format-list");
+    if (!box || box.dataset.built) return;
+    box.dataset.built = "1";
+    FORMAT_OPTIONS.forEach(([val, label]) => {
+      const lab = document.createElement("label"); lab.className = "fmt";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.dataset.format = val;
+      cb.addEventListener("change", onFormatChange);
+      const sp = document.createElement("span"); sp.textContent = label;
+      lab.appendChild(cb); lab.appendChild(sp); box.appendChild(lab);
+    });
+  }
+  function onFormatChange() {
+    const sel = [];
+    document.querySelectorAll("#format-list input[type=checkbox]").forEach((cb) => { if (cb.checked) sel.push(cb.dataset.format); });
+    touchSettings((s) => { s.scan_formats = sel; });
+  }
+  function renderScanFormats(sel) {
+    document.querySelectorAll("#format-list input[type=checkbox]").forEach((cb) => {
+      cb.checked = sel.indexOf(cb.dataset.format) !== -1;
+    });
+  }
+  async function showSupportedFormats() {
+    const el = $("supported-formats");
+    if (!el) return;
+    if (!("BarcodeDetector" in window)) { el.textContent = "⚠ This browser can't scan (no BarcodeDetector) — use Chrome on Android."; return; }
+    try { const f = await window.BarcodeDetector.getSupportedFormats(); el.textContent = "This device can read: " + f.join(", "); }
+    catch (e) { el.textContent = ""; }
   }
 
   function renderSlots() {
@@ -851,6 +952,7 @@
     on("online-badge", "click", () => showTab("settings")); // tap status → fix token/sync
 
     on("btn-camera", "click", () => (stream ? stopCamera() : startCamera()));
+    on("btn-torch", "click", toggleTorch);
     on("btn-manual", "click", () => { handleScan($("manual-input").value); $("manual-input").value = ""; });
     on("manual-input", "keydown", (e) => { if (e.key === "Enter") $("btn-manual").click(); });
     on("btn-override", "click", doOverride);
@@ -872,6 +974,8 @@
     // Settings — each change updates the synced settings object (last-write-wins).
     on("set-walkup", "change", (e) => touchSettings((s) => { s.walkup_mode = e.target.checked; }));
     on("set-manual", "change", (e) => touchSettings((s) => { s.manual_entry = e.target.checked; }));
+    buildScanFormats();
+    on("set-pattern", "change", (e) => touchSettings((s) => { s.scan_pattern = e.target.value.trim(); }));
     const numEdit = (id, key, min) => on(id, "change", (e) => {
       const v = Math.max(min, parseInt(e.target.value || "0", 10) || 0);
       touchSettings((s) => { s[key] = v; });
@@ -984,6 +1088,7 @@
     wire();
     renderAll();
     renderConn();
+    showSupportedFormats();
     // First sync; it schedules every subsequent poll itself (adaptive backoff).
     syncNow();
 

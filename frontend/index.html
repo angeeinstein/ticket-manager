@@ -62,6 +62,7 @@
     </div>
     <div class="row">
       <button id="btn-camera" class="btn">Start camera</button>
+      <button id="btn-torch" class="btn" style="display:none">🔦 Light</button>
     </div>
     <div class="row" id="manual-row" style="display:none">
       <input id="manual-input" class="input" inputmode="text" placeholder="Or type barcode…" />
@@ -128,6 +129,17 @@
         <input id="set-grace-after" class="input" type="number" inputmode="numeric" min="0" step="1" />
       </label>
     </div>
+
+    <h2>Scanning</h2>
+    <p class="muted">Restrict to your ticket's barcode type to avoid mis-reads. SKIDATA
+      tickets are usually <b>ITF</b> (Interleaved 2 of 5).</p>
+    <div id="format-list" class="format-list"></div>
+    <label class="field">
+      <span>Accept only values matching (regex; blank = accept any)</span>
+      <input id="set-pattern" class="input" type="text" inputmode="text" autocapitalize="off"
+        autocorrect="off" spellcheck="false" placeholder="^\d{20}$" />
+    </label>
+    <p id="supported-formats" class="muted"></p>
 
     <h2>Time slots <span id="slot-count" class="muted"></span></h2>
     <p class="muted">Define the event's slots — used for capacity stats and (in walk-up mode)

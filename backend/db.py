@@ -28,7 +28,7 @@ def _now_iso() -> str:
 
 
 def _load_slots(raw: str) -> list:
-    """Parse the stored slots JSON, tolerating bad data rather than breaking sync."""
+    """Parse a stored JSON list (slots, scan_formats…), tolerating bad data."""
     try:
         val = json.loads(raw or "[]")
         return val if isinstance(val, list) else []
@@ -36,16 +36,27 @@ def _load_slots(raw: str) -> list:
         return []
 
 
-def init_db(
-    db_path: Path,
-    event_date: str,
-    grace_before: int,
-    grace_after: int,
-    max_capacity_per_slot: int = 0,
-    slot_length_minutes: int = 15,
-    walkup_mode: bool = False,
-    manual_entry: bool = False,
-) -> None:
+# Default values + how each setting is normalised for storage. Keeping this in one place
+# means adding a setting touches only this map (and the sync snapshot / Pydantic model).
+def _settings_strings(values: dict) -> dict[str, str]:
+    def i(key, default, lo):
+        return str(max(lo, int(values.get(key, default))))
+    def b(key):
+        return "1" if values.get(key) else "0"
+    return {
+        "grace_before_minutes": i("grace_before_minutes", 0, 0),
+        "grace_after_minutes": i("grace_after_minutes", 0, 0),
+        "max_capacity_per_slot": i("max_capacity_per_slot", 0, 0),
+        "slot_length_minutes": i("slot_length_minutes", 15, 1),
+        "walkup_mode": b("walkup_mode"),
+        "manual_entry": b("manual_entry"),
+        "scan_pattern": str(values.get("scan_pattern", "") or ""),
+        "scan_formats": json.dumps(values.get("scan_formats") or []),
+        "slots": json.dumps(values.get("slots") or []),
+    }
+
+
+def init_db(db_path: Path, event_date: str, settings_defaults: dict | None = None) -> None:
     """Open the connection and create the schema. Safe to call once at startup."""
     global _conn, _db_path
     _db_path = db_path
@@ -84,21 +95,10 @@ def init_db(
         """
     )
     _conn.commit()
-    _seed_state(
-        event_date, grace_before, grace_after,
-        max_capacity_per_slot, slot_length_minutes, walkup_mode, manual_entry,
-    )
+    _seed_state(event_date, settings_defaults or {})
 
 
-def _seed_state(
-    event_date: str,
-    grace_before: int,
-    grace_after: int,
-    max_capacity_per_slot: int,
-    slot_length_minutes: int,
-    walkup_mode: bool,
-    manual_entry: bool,
-) -> None:
+def _seed_state(event_date: str, settings_defaults: dict) -> None:
     defaults = {
         "data_version": "1",
         "event_date": event_date,
@@ -107,16 +107,10 @@ def _seed_state(
         "delay_updated_at": _now_iso(),
         "delay_updated_by": "server",
         # Settings group (own last-write-wins timestamp; see update_settings_state).
-        "grace_before_minutes": str(grace_before),
-        "grace_after_minutes": str(grace_after),
-        "max_capacity_per_slot": str(max_capacity_per_slot),
-        "slot_length_minutes": str(slot_length_minutes),
-        "walkup_mode": "1" if walkup_mode else "0",
-        "manual_entry": "1" if manual_entry else "0",
-        "slots": "[]",  # JSON list of {"start":"HH:MM","end":"HH:MM"} — the event schedule
         "settings_updated_at": _now_iso(),
         "settings_updated_by": "server",
     }
+    defaults.update(_settings_strings(settings_defaults))
     assert _conn is not None
     cur = _conn.execute("SELECT key FROM app_state")
     existing = {r["key"] for r in cur.fetchall()}
@@ -196,19 +190,10 @@ def update_delay_state(
     return {r["key"]: r["value"] for r in rows}
 
 
-def update_settings_state(
-    grace_before_minutes: int,
-    grace_after_minutes: int,
-    max_capacity_per_slot: int,
-    slot_length_minutes: int,
-    walkup_mode: bool,
-    manual_entry: bool,
-    slots: list | None,
-    updated_at: str,
-    updated_by: str,
-) -> dict:
+def update_settings_state(values: dict, updated_at: str, updated_by: str) -> dict:
     """Apply a settings update from a phone using last-write-wins by `settings_updated_at`.
 
+    `values` is the settings dict (grace, capacity, walkup, scan_formats, slots, …).
     Settings live in their own group with their own timestamp so that frequent delay
     changes never clobber an operator's (rare) settings change and vice-versa.
     """
@@ -216,17 +201,9 @@ def update_settings_state(
     with _lock:
         current = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM app_state").fetchall()}
         if updated_at >= current.get("settings_updated_at", ""):
-            updates = {
-                "grace_before_minutes": str(max(0, int(grace_before_minutes))),
-                "grace_after_minutes": str(max(0, int(grace_after_minutes))),
-                "max_capacity_per_slot": str(max(0, int(max_capacity_per_slot))),
-                "slot_length_minutes": str(max(1, int(slot_length_minutes))),
-                "walkup_mode": "1" if walkup_mode else "0",
-                "manual_entry": "1" if manual_entry else "0",
-                "slots": json.dumps(slots if slots is not None else []),
-                "settings_updated_at": updated_at,
-                "settings_updated_by": updated_by,
-            }
+            updates = _settings_strings(values)
+            updates["settings_updated_at"] = updated_at
+            updates["settings_updated_by"] = updated_by
             _set_state_locked(updates)
             _bump_version_locked()
         conn.commit()
@@ -339,6 +316,8 @@ def sync_snapshot() -> dict[str, Any]:
             "slot_length_minutes": int(state.get("slot_length_minutes", "15")),
             "walkup_mode": state.get("walkup_mode", "0") == "1",
             "manual_entry": state.get("manual_entry", "0") == "1",
+            "scan_formats": _load_slots(state.get("scan_formats", "[]")),
+            "scan_pattern": state.get("scan_pattern", ""),
             "slots": _load_slots(state.get("slots", "[]")),
             "updated_at": state.get("settings_updated_at"),
             "updated_by": state.get("settings_updated_by"),
