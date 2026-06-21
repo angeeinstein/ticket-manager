@@ -313,49 +313,91 @@
   let scanning = false;
   let lastHandled = { value: null, at: 0 };
 
+  let zxingReader = null, usingZxing = false, _zxingPromise = null;
+
+  // ZXing (vendored, lazy-loaded) is the fallback for browsers without BarcodeDetector —
+  // notably iOS Safari. Cached by the service worker, so it also works offline.
+  function loadZxing() {
+    if (window.ZXing) return Promise.resolve();
+    if (_zxingPromise) return _zxingPromise;
+    _zxingPromise = new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "vendor/zxing.js";
+      s.onload = () => res();
+      s.onerror = () => rej(new Error("could not load the scanner library"));
+      document.head.appendChild(s);
+    });
+    return _zxingPromise;
+  }
+  const ZX_MAP = {
+    itf: "ITF", code_128: "CODE_128", code_39: "CODE_39", code_93: "CODE_93", codabar: "CODABAR",
+    qr_code: "QR_CODE", ean_13: "EAN_13", ean_8: "EAN_8", upc_a: "UPC_A", upc_e: "UPC_E",
+    pdf417: "PDF_417", data_matrix: "DATA_MATRIX", aztec: "AZTEC",
+  };
+  function zxingFormats(list) { return (list || []).map((f) => window.ZXing.BarcodeFormat[ZX_MAP[f]]).filter((v) => v !== undefined); }
+  function zxingNameOf(val) { for (const k in ZX_MAP) { if (window.ZXing.BarcodeFormat[ZX_MAP[k]] === val) return k; } return ""; }
+
   async function startCamera() {
-    if (stream) return;
+    if (stream || usingZxing) return;
     initAudio(); // the tap that starts the camera is our chance to unlock Web Audio
+    compileScanRegex();
+    resetConfirm();
+    const video = $("video");
+    video.setAttribute("playsinline", "");
     try {
-      // Prefer the rear camera at a decent resolution — enough detail for small 1-D
-      // barcodes without making each detect() call slow.
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-      const video = $("video");
-      video.srcObject = stream;
-      video.setAttribute("playsinline", "");
-      await video.play();
-      $("btn-camera").textContent = "Stop camera";
       if ("BarcodeDetector" in window) {
-        // Restrict to the configured symbologies (intersected with what the device can do),
-        // so unrelated barcode types are never decoded into spurious "tickets".
+        // Native path. Rear camera at a decent resolution — enough detail for small 1-D
+        // barcodes without making each detect() call slow.
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        video.srcObject = stream;
+        await video.play();
         let supported = [];
         try { supported = await window.BarcodeDetector.getSupportedFormats(); } catch (e) { supported = []; }
         const want = (LS.settings.scan_formats || []).filter((f) => !supported.length || supported.indexOf(f) !== -1);
         detector = want.length ? new window.BarcodeDetector({ formats: want }) : new window.BarcodeDetector();
-        compileScanRegex();
-        resetConfirm();
         scanning = true;
-        requestAnimationFrame(scanFrame); // self-scheduling: scans as fast as the device allows
+        requestAnimationFrame(scanFrame);
+        $("btn-camera").textContent = "Stop camera";
         setupTorch();
       } else {
-        showResult("info", "Camera scanning not supported", "Use manual entry below (BarcodeDetector unavailable on this browser).", null);
+        await startZxing(video); // iOS Safari & friends
       }
     } catch (e) {
-      showResult("info", "Camera unavailable", String(e.message || e) + " — use manual entry.", null);
+      usingZxing = false;
+      showResult("info", "Camera unavailable", String(e.message || e) + " — try the Manual entry option in Settings.", null);
     }
+  }
+
+  async function startZxing(video) {
+    showResult("info", "Starting scanner…", "Loading the barcode reader…", null);
+    await loadZxing();
+    const hints = new Map();
+    const fmts = zxingFormats(LS.settings.scan_formats || []);
+    if (fmts.length) hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
+    hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
+    zxingReader = new window.ZXing.BrowserMultiFormatReader(hints);
+    usingZxing = true;
+    await zxingReader.decodeFromConstraints(
+      { video: { facingMode: { ideal: "environment" } }, audio: false },
+      video,
+      (result) => { if (result) onDetect(result.getText(), zxingNameOf(result.getBarcodeFormat())); }
+    );
+    stream = video.srcObject || null; // for torch / stop
+    $("btn-camera").textContent = "Stop camera";
+    setupTorch();
+    showResult("idle", "Ready", "Point the camera at a ticket barcode.", null);
   }
 
   function stopCamera() {
     scanning = false;
     torchOn = false;
+    if (zxingReader) { try { zxingReader.reset(); } catch (e) { /* ignore */ } zxingReader = null; }
+    usingZxing = false;
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    const v = $("video"); if (v) v.srcObject = null;
     detector = null;
     $("btn-camera").textContent = "Start camera";
     const tb = $("btn-torch"); if (tb) tb.style.display = "none";

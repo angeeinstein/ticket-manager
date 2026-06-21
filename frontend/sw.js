@@ -9,7 +9,7 @@
  * API calls (/api/*) are never handled here — they go straight to the network and the app
  * handles offline itself via IndexedDB.
  */
-const CACHE = "ticket-checker-v15";
+const CACHE = "ticket-checker-v16";
 const SHELL = [
   "./",
   "index.html",
@@ -21,6 +21,7 @@ const SHELL = [
   "icon-192.png",
   "icon-512.png",
   "icon-512-maskable.png",
+  "vendor/zxing.js",
 ];
 
 self.addEventListener("install", (event) => {
