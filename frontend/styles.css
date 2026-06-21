@@ -70,11 +70,11 @@ body {
 
 /* ------------------------------------------------------------- result hero */
 .result {
-  flex: 0 0 auto; text-align: center; border-radius: var(--r); padding: 14px 14px 16px;
+  flex: 0 0 auto; text-align: center; border-radius: var(--r); padding: 12px 14px 14px;
   border: 1px solid var(--border); background: var(--surface);
 }
-.result-icon { font-size: 2rem; line-height: 1; margin-bottom: 2px; }
-.result-status { font-size: 1.7rem; font-weight: 800; letter-spacing: .5px; }
+.result-icon { font-size: 1.9rem; line-height: 1; margin-bottom: 2px; }
+.result-status { font-size: 1.5rem; font-weight: 800; letter-spacing: .5px; }
 .result-detail { color: var(--muted); margin-top: 4px; font-size: .9rem; word-break: break-all; }
 .result-idle { color: var(--muted); }
 .result-idle .result-icon, .result-info .result-icon { color: var(--accent); }
@@ -91,9 +91,12 @@ body {
 
 /* ----------------------------------------------------------------- camera */
 .camera-wrap {
-  flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden;
+  position: relative; overflow: hidden;
   background: #000; border-radius: var(--r); border: 1px solid var(--border); display: flex;
 }
+/* More specific than `#tab-scan > *` so the camera actually flexes; capped so it never
+   dominates the screen, and shrinks on short phones. */
+#tab-scan .camera-wrap { flex: 1 1 auto; min-height: 150px; max-height: 40vh; }
 #video { width: 100%; height: 100%; object-fit: cover; }
 .reticle {
   position: absolute; inset: 18% 14%; pointer-events: none;
@@ -106,14 +109,18 @@ body {
 }
 
 /* ------------------------------------------------------------------ cards */
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px; margin: 0 0 12px; }
-.card h3 { margin: 0 0 10px; font-size: 1.05rem; font-weight: 700; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin: 0 0 14px; }
+.card h3 { margin: 0 0 4px; font-size: 1.05rem; font-weight: 700; }
 .card-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 8px; }
-.delay-card { flex: 0 0 auto; margin: 0; }
-.hint { color: var(--muted); font-size: .82rem; margin: 6px 0; }
+.delay-card { flex: 0 0 auto; margin: 0; padding: 12px; }
+.hint { color: var(--muted); font-size: .82rem; margin: 4px 0 0; }
+.sep { border: none; border-top: 1px solid var(--border); margin: 16px 0 0; }
 
 /* ------------------------------------------------------------------ rows/buttons */
-.row { display: flex; gap: 8px; margin-top: 8px; align-items: stretch; }
+/* First control sits a touch under the heading/hint; rows keep an even rhythm. */
+.card > .row:first-of-type, .card > .field:first-of-type,
+.card > .input:first-of-type, .hint + .row, .hint + .field { margin-top: 10px; }
+.row { display: flex; gap: 10px; margin-top: 10px; align-items: stretch; }
 .row.wrap { flex-wrap: wrap; }
 .btn {
   flex: 1 1 0; min-width: 0; min-height: 50px; padding: 12px 12px; border: none; border-radius: 12px;
@@ -126,11 +133,12 @@ body {
 .btn-warn { background: var(--warn); color: #1b1206; }
 .btn-danger-soft { background: rgba(220,38,38,.14); color: #f87171; box-shadow: inset 0 0 0 1px rgba(248,113,113,.35); }
 .btn-narrow { flex: 0 0 auto; padding: 0 18px; }
-.card > .btn, .card > .input { width: 100%; }
+.card > .btn { width: 100%; margin-top: 10px; }
+.card > .input { width: 100%; }
 
 /* ------------------------------------------------------------------ inputs/fields */
 .input {
-  width: 100%; min-width: 0; padding: 13px; border-radius: 12px; border: 1px solid var(--border);
+  width: 100%; min-width: 0; padding: 12px 13px; border-radius: 12px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font-size: 1rem;
 }
 .input::placeholder { color: #5f7799; }
